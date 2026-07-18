@@ -74,7 +74,8 @@ function HealthCard({ health }: { health: HealthState }) {
           <p>{health.message}</p>
         ) : (
           <p>
-            {health.data.status}:{health.data.service} at{' '}
+            {health.data.status}:{health.data.service} with PostgreSQL in{' '}
+            {health.data.database.latencyMs}ms at{' '}
             {new Date(health.data.timestamp).toLocaleTimeString()}
           </p>
         )}

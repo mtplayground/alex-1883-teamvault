@@ -1,0 +1,2 @@
+-- Baseline migration for future data models.
+-- Issue #2 intentionally creates the migration workflow without product tables.
