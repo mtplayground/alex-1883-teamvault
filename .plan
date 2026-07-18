@@ -1,0 +1,48 @@
+Architecture plan
+
+Product scope
+- The product is a multi-workspace document vault with email-based accounts, project organization, document upload/view/download, document sharing, and activity history.
+
+Application shape
+- Use a single full-stack web application with a server-rendered or API-backed frontend, selected by the project skeleton in issue #1.
+- Keep domain logic independent from UI handlers so later issues can add APIs, screens, and tests without duplicating authorization or validation.
+- Treat the reverse proxy as trusted infrastructure: derive public URLs from forwarded host/proto headers or a configured public origin, especially for email links and same-origin checks.
+
+Proposed module structure
+- `src/config`: environment parsing, public origin, database URL, email provider settings, storage settings, session/cookie settings.
+- `src/db`: connection pool, migrations, transaction helpers, generated or shared database types.
+- `src/auth`: password hashing, email verification tokens, password reset tokens, session creation/validation, route guards.
+- `src/email`: provider client, message sending facade, templates for verification, reset, and invitations.
+- `src/workspaces`: workspace model, membership roles, invitations, workspace management handlers and UI.
+- `src/projects`: project model, role-checked CRUD APIs, list/detail/edit UI.
+- `src/documents`: document metadata model, upload pipeline, storage adapter, viewing/downloading, sharing permissions.
+- `src/activity`: activity event recorder, query APIs, activity history UI.
+- `src/ui` or frontend app modules: shared layout, forms, route protection, signed-in shell, feature screens.
+- `tests` or `e2e`: core journey end-to-end test covering sign-up, workspace setup, project creation, upload, share, and activity.
+
+Shared types and contracts
+- Define stable domain IDs for users, workspaces, memberships, projects, documents, shares, invitations, sessions, and activity events.
+- Centralize role and permission checks. UI and API routes should call the same authorization helpers where possible.
+- Use explicit request/response DTOs for API boundaries, with validation close to handlers and domain invariants close to services.
+- Store timestamps consistently in UTC and record actor/user IDs on auditable mutations.
+
+Issue dependency map
+- #1 must establish the app framework, build command, package metadata, formatter/linter, and baseline routing.
+- #2 and #3 should follow immediately because database, migrations, and typed configuration underpin nearly every later issue.
+- #4 and #5 can proceed after config exists; all outbound email links depend on public origin handling.
+- #6 through #12 form the account/auth slice: user model, sign-up, verification, login, reset, auth screens, signed-in state, and route protection.
+- #13 through #18 form the workspace slice: workspace/membership schema first, then workspace management, invitations, acceptance, and screens.
+- #19 through #22 form the project slice and depend on workspace roles.
+- #23 through #27 form the document upload/viewing slice and depend on projects and storage configuration.
+- #28 through #30 add sharing and depend on documents plus membership/guest concepts.
+- #31 through #33 add activity history and should instrument existing mutations rather than invent parallel workflows.
+- #34 should be implemented last as an end-to-end journey once the core slices are functional.
+
+Key design decisions
+- Authorization is workspace-scoped. Projects and documents inherit access from workspace membership unless document sharing explicitly grants narrower external access.
+- Roles should be modeled as durable enum/string values with a small permission matrix, likely owner/admin/member/guest unless the issue text specifies otherwise.
+- Invitations should be tokenized, expiring, and associated with a workspace plus intended email and role.
+- Document storage should use an adapter interface so local development storage and future object storage can share metadata and permission logic.
+- Activity recording should be best-effort inside the same transaction for critical database mutations when practical, with event names and metadata kept queryable.
+- Email templates should be simple, deterministic, and parameterized by product name, recipient, action URL, and expiry context.
+- Tests should favor the highest-risk flows first: auth token lifecycle, role checks, document permission checks, and the end-to-end core journey.
