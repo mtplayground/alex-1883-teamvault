@@ -6,6 +6,7 @@ import express, {
   type RequestHandler,
 } from 'express';
 
+import { closePool, smokeTestDatabase } from './db/pool.js';
 import type { HealthResponse } from '../shared/health.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -21,14 +22,39 @@ app.disable('x-powered-by');
 app.set('trust proxy', 1);
 app.use(express.json());
 
-const healthHandler: RequestHandler = (_req, res) => {
-  const body: HealthResponse = {
-    status: 'ok',
-    service: 'api',
-    timestamp: new Date().toISOString(),
-  };
+const healthHandler: RequestHandler = async (_req, res) => {
+  try {
+    const database = await smokeTestDatabase();
+    const body: HealthResponse = {
+      status: 'ok',
+      service: 'api',
+      timestamp: new Date().toISOString(),
+      database: {
+        status: 'ok',
+        latencyMs: database.latencyMs,
+        serverTime: database.serverTime,
+      },
+    };
 
-  res.json(body);
+    res.json(body);
+  } catch (error) {
+    console.error('Health check failed', {
+      name: error instanceof Error ? error.name : undefined,
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+
+    const body: HealthResponse = {
+      status: 'error',
+      service: 'api',
+      timestamp: new Date().toISOString(),
+      database: {
+        status: 'error',
+      },
+    };
+
+    res.status(503).json(body);
+  }
 };
 
 app.get('/api/health', healthHandler);
@@ -54,3 +80,11 @@ app.use(errorHandler);
 app.listen(port, host, () => {
   console.log(`Server listening on http://${host}:${port}`);
 });
+
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.once(signal, () => {
+    void closePool().finally(() => {
+      process.exit(0);
+    });
+  });
+}
