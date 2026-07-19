@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  createProjectDocumentShare,
   createProjectDocument,
   getProjectDocument,
+  isProjectDocumentSharedWithUser,
   listProjectDocuments,
   ProjectDocumentNotFoundError,
   type DocumentQueryable,
@@ -81,6 +83,74 @@ test('throws when document metadata cannot be found', async () => {
       }),
     ProjectDocumentNotFoundError,
   );
+});
+
+test('creates document shares for workspace users', async () => {
+  const queries: Array<{
+    sql: string;
+    values: readonly unknown[] | undefined;
+  }> = [];
+  const db: DocumentQueryable = {
+    query: async <T>(sql: string, values?: readonly unknown[]) => {
+      queries.push({ sql, values });
+      return {
+        rows: [
+          {
+            document_id: values?.[0],
+            workspace_id: values?.[1],
+            project_id: values?.[2],
+            user_sub: values?.[3],
+            shared_by_sub: values?.[4],
+            created_at: now,
+          },
+        ] as T[],
+      };
+    },
+  };
+
+  const share = await createProjectDocumentShare(db, {
+    documentId: ' document-1 ',
+    workspaceId: ' workspace-1 ',
+    projectId: ' project-1 ',
+    userSub: ' auth|guest ',
+    sharedBySub: ' auth|owner ',
+  });
+
+  assert.equal(share.documentId, 'document-1');
+  assert.equal(share.workspaceId, 'workspace-1');
+  assert.equal(share.projectId, 'project-1');
+  assert.equal(share.userSub, 'auth|guest');
+  assert.equal(share.sharedBySub, 'auth|owner');
+  assert.match(queries[0]?.sql ?? '', /insert into project_document_shares/);
+  assert.deepEqual(queries[0]?.values, [
+    'document-1',
+    'workspace-1',
+    'project-1',
+    'auth|guest',
+    'auth|owner',
+  ]);
+});
+
+test('checks whether a document is shared with a user', async () => {
+  const queries: Array<{
+    sql: string;
+    values: readonly unknown[] | undefined;
+  }> = [];
+  const db: DocumentQueryable = {
+    query: async <T>(sql: string, values?: readonly unknown[]) => {
+      queries.push({ sql, values });
+      return { rows: [{ document_id: 'document-1' }] as T[] };
+    },
+  };
+
+  const isShared = await isProjectDocumentSharedWithUser(db, {
+    documentId: ' document-1 ',
+    userSub: ' auth|guest ',
+  });
+
+  assert.equal(isShared, true);
+  assert.match(queries[0]?.sql ?? '', /from project_document_shares/);
+  assert.deepEqual(queries[0]?.values, ['document-1', 'auth|guest']);
 });
 
 function documentRow() {

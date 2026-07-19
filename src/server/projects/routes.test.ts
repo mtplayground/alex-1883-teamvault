@@ -248,9 +248,9 @@ test('guest can download documents from a shared project', async () => {
   const db = routeDb([
     userRow(),
     roleRow('guest'),
+    documentRows(),
     projectRows(),
     shareRows(),
-    documentRows(),
   ]);
   const response = await withProjectServer(
     db,
@@ -311,12 +311,95 @@ test('guest cannot list documents from an unshared project', async () => {
   });
 });
 
+test('guest can download explicitly shared documents without project access', async () => {
+  const db = routeDb([
+    userRow(),
+    roleRow('guest'),
+    documentRows(),
+    projectRows(),
+    emptyRows(),
+    documentShareRows(),
+  ]);
+  const response = await withProjectServer(
+    db,
+    (baseUrl) =>
+      fetch(
+        `${baseUrl}/api/workspaces/workspace-1/projects/project-1/documents/document-1/download`,
+        {
+          headers: {
+            cookie: 'mctai_session=valid',
+          },
+        },
+      ),
+    {
+      storage: {
+        putObject: async () => {
+          throw new Error('unexpected put');
+        },
+        getObject: async (key) => {
+          assert.equal(key, 'documents/document-1');
+          return {
+            body: Buffer.from('pdf-bytes'),
+            contentType: 'application/pdf',
+            contentLength: 9,
+          };
+        },
+      },
+    },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(
+    response.headers.get('content-disposition'),
+    'attachment; filename="Launch Plan.pdf"',
+  );
+});
+
+test('guest cannot download documents without project access or document share', async () => {
+  const db = routeDb([
+    userRow(),
+    roleRow('guest'),
+    documentRows(),
+    projectRows(),
+    emptyRows(),
+    emptyRows(),
+  ]);
+  const response = await withProjectServer(
+    db,
+    (baseUrl) =>
+      fetch(
+        `${baseUrl}/api/workspaces/workspace-1/projects/project-1/documents/document-1/download`,
+        {
+          headers: {
+            cookie: 'mctai_session=valid',
+          },
+        },
+      ),
+    {
+      storage: {
+        putObject: async () => {
+          throw new Error('unexpected put');
+        },
+        getObject: async () => {
+          throw new Error('unexpected get');
+        },
+      },
+    },
+  );
+
+  assert.equal(response.status, 403);
+  assert.deepEqual(await response.json(), {
+    error:
+      'Documents can only be viewed by project users or explicitly shared users',
+  });
+});
+
 test('member can view documents inline', async () => {
   const db = routeDb([
     userRow(),
     roleRow('member'),
-    projectRows(),
     documentRows(),
+    projectRows(),
   ]);
   const response = await withProjectServer(
     db,
@@ -439,6 +522,16 @@ function shareRows() {
     rows: [
       {
         project_id: 'project-1',
+      },
+    ],
+  };
+}
+
+function documentShareRows() {
+  return {
+    rows: [
+      {
+        document_id: 'document-1',
       },
     ],
   };
