@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { AuthConfig } from '../config.js';
-import { buildAuthLoginUrl } from './routes.js';
+import { buildAuthLoginUrl } from './urls.js';
 
 test('builds central auth login URL with app token and frontend return_to', () => {
   const authConfig: AuthConfig = {

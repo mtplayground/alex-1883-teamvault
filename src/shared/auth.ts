@@ -11,3 +11,14 @@ export interface AuthSessionResponse {
   isNew: boolean;
   message: string;
 }
+
+export interface PasswordResetRequestResponse {
+  status: 'accepted';
+  message: string;
+}
+
+export interface PasswordResetCompleteResponse {
+  status: 'central_auth_required';
+  message: string;
+  loginUrl: string;
+}

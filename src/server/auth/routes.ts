@@ -7,7 +7,12 @@ import {
   authenticateSession,
   type AuthenticationResult,
 } from './middleware.js';
+import {
+  passwordResetCompleteResponse,
+  passwordResetRequestResponse,
+} from './password-reset.js';
 import { type MctaiJwtVerifier } from './session.js';
+import { buildAuthLoginUrl } from './urls.js';
 import type { AuthSessionResponse } from '../../shared/auth.js';
 
 export interface AuthRouterOptions {
@@ -59,6 +64,23 @@ export function createAuthRouter({
       302,
       buildAuthLoginUrl(authConfig, getReturnToUrl(req, selfUrl)),
     );
+  });
+
+  router.post('/password-reset/request', (_req, res) => {
+    res.status(202).json(passwordResetRequestResponse());
+  });
+
+  router.post('/password-reset/complete', (req, res) => {
+    if (!authConfig) {
+      res.status(503).json({ error: 'Authentication is not configured' });
+      return;
+    }
+
+    res
+      .status(410)
+      .json(
+        passwordResetCompleteResponse(authConfig, getReturnToUrl(req, selfUrl)),
+      );
   });
 
   router.get('/session', async (req, res, next) => {
@@ -117,17 +139,6 @@ function sessionResponseFor(
       ? 'Registration complete.'
       : `Welcome back, ${result.user.name ?? result.user.email}.`,
   };
-}
-
-export function buildAuthLoginUrl(
-  authConfig: AuthConfig,
-  returnTo: string,
-): string {
-  const url = new URL('/login', authConfig.url);
-  url.searchParams.set('app_token', authConfig.appToken);
-  url.searchParams.set('return_to', returnTo);
-
-  return url.toString();
 }
 
 function getReturnToUrl(
