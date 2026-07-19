@@ -28,7 +28,7 @@ export interface StorageConfig {
 export interface AppConfig {
   server: ServerConfig;
   database: DatabaseConfig;
-  auth: AuthConfig;
+  auth: AuthConfig | null;
   email: EmailConfig | null;
   storage: StorageConfig;
 }
@@ -54,14 +54,10 @@ export function readAppConfig(env: NodeJS.ProcessEnv): AppConfig {
   return {
     server: {
       ...runtime.server,
-      selfUrl: readUrl(env, 'SELF_URL'),
+      selfUrl: readSelfUrl(env),
     },
     database: runtime.database,
-    auth: {
-      url: readUrl(env, 'MCTAI_AUTH_URL'),
-      appToken: readString(env, 'MCTAI_AUTH_APP_TOKEN'),
-      jwksUrl: readUrl(env, 'MCTAI_AUTH_JWKS_URL'),
-    },
+    auth: readAuthConfig(env),
     email: readEmailConfig(env),
     storage: {
       endpoint: readUrl(env, 'S3_ENDPOINT_URL'),
@@ -71,6 +67,32 @@ export function readAppConfig(env: NodeJS.ProcessEnv): AppConfig {
       secretAccessKey: readString(env, 'S3_SECRET_ACCESS_KEY'),
     },
   };
+}
+
+export function readAuthConfig(env: NodeJS.ProcessEnv): AuthConfig | null {
+  const hasUrl = hasValue(env.MCTAI_AUTH_URL);
+  const hasToken = hasValue(env.MCTAI_AUTH_APP_TOKEN);
+  const hasJwksUrl = hasValue(env.MCTAI_AUTH_JWKS_URL);
+
+  if (!hasUrl && !hasToken && !hasJwksUrl) {
+    return null;
+  }
+
+  if (!hasUrl || !hasToken || !hasJwksUrl) {
+    throw new Error(
+      'MCTAI_AUTH_URL, MCTAI_AUTH_APP_TOKEN, and MCTAI_AUTH_JWKS_URL must be configured together',
+    );
+  }
+
+  return {
+    url: readUrl(env, 'MCTAI_AUTH_URL'),
+    appToken: readString(env, 'MCTAI_AUTH_APP_TOKEN'),
+    jwksUrl: readUrl(env, 'MCTAI_AUTH_JWKS_URL'),
+  };
+}
+
+export function readSelfUrl(env: NodeJS.ProcessEnv): string {
+  return readUrl(env, 'SELF_URL');
 }
 
 export function readEmailConfig(env: NodeJS.ProcessEnv): EmailConfig | null {
@@ -113,9 +135,11 @@ function hasValue(value: string | undefined): boolean {
 
 function readUrl(env: NodeJS.ProcessEnv, key: string): string {
   const value = readString(env, key);
+  const trimmedValue = value.trim();
 
   try {
-    return new URL(value).toString();
+    new URL(trimmedValue);
+    return trimmedValue;
   } catch {
     throw new Error(`${key} must be a valid URL`);
   }

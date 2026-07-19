@@ -6,7 +6,8 @@ import express, {
   type RequestHandler,
 } from 'express';
 
-import { readRuntimeConfig } from './config.js';
+import { readAuthConfig, readRuntimeConfig, readSelfUrl } from './config.js';
+import { createAuthRouter } from './auth/routes.js';
 import { closePool, smokeTestDatabase } from './db/pool.js';
 import type { HealthResponse } from '../shared/health.js';
 
@@ -21,6 +22,13 @@ const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
 app.use(express.json());
+app.use(
+  '/api/auth',
+  createAuthRouter({
+    authConfig: readAuthConfig(process.env),
+    selfUrl: process.env.SELF_URL ? readSelfUrl(process.env) : null,
+  }),
+);
 
 const healthHandler: RequestHandler = async (_req, res) => {
   try {
