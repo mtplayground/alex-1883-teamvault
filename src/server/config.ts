@@ -29,7 +29,7 @@ export interface AppConfig {
   server: ServerConfig;
   database: DatabaseConfig;
   auth: AuthConfig;
-  email: EmailConfig;
+  email: EmailConfig | null;
   storage: StorageConfig;
 }
 
@@ -62,10 +62,7 @@ export function readAppConfig(env: NodeJS.ProcessEnv): AppConfig {
       appToken: readString(env, 'MCTAI_AUTH_APP_TOKEN'),
       jwksUrl: readUrl(env, 'MCTAI_AUTH_JWKS_URL'),
     },
-    email: {
-      url: readUrl(env, 'MCTAI_EMAIL_URL'),
-      appToken: readString(env, 'MCTAI_EMAIL_APP_TOKEN'),
-    },
+    email: readEmailConfig(env),
     storage: {
       endpoint: readUrl(env, 'S3_ENDPOINT_URL'),
       region: readString(env, 'S3_REGION'),
@@ -73,6 +70,26 @@ export function readAppConfig(env: NodeJS.ProcessEnv): AppConfig {
       accessKeyId: readString(env, 'S3_ACCESS_KEY_ID'),
       secretAccessKey: readString(env, 'S3_SECRET_ACCESS_KEY'),
     },
+  };
+}
+
+export function readEmailConfig(env: NodeJS.ProcessEnv): EmailConfig | null {
+  const hasUrl = hasValue(env.MCTAI_EMAIL_URL);
+  const hasToken = hasValue(env.MCTAI_EMAIL_APP_TOKEN);
+
+  if (!hasUrl && !hasToken) {
+    return null;
+  }
+
+  if (!hasUrl || !hasToken) {
+    throw new Error(
+      'MCTAI_EMAIL_URL and MCTAI_EMAIL_APP_TOKEN must be configured together',
+    );
+  }
+
+  return {
+    url: readUrl(env, 'MCTAI_EMAIL_URL'),
+    appToken: readString(env, 'MCTAI_EMAIL_APP_TOKEN'),
   };
 }
 
@@ -88,6 +105,10 @@ function readString(
   }
 
   return value;
+}
+
+function hasValue(value: string | undefined): boolean {
+  return value !== undefined && value.trim().length > 0;
 }
 
 function readUrl(env: NodeJS.ProcessEnv, key: string): string {
