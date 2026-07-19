@@ -59,6 +59,36 @@ export async function recordActivity(
   return mapActivityEntryRow(row);
 }
 
+export async function listWorkspaceActivity(
+  db: ActivityQueryable,
+  input: {
+    workspaceId: string;
+    limit: number;
+    offset: number;
+    projectId?: string | null;
+  },
+): Promise<ActivityEntry[]> {
+  const result = await db.query<ActivityEntryRow>(
+    `
+      select id, actor_sub, action, workspace_id, project_id, document_id, metadata, created_at
+      from activity_entries
+      where workspace_id = $1
+        and ($4::uuid is null or project_id = $4)
+      order by created_at desc, id desc
+      limit $2
+      offset $3
+    `,
+    [
+      normalizeRequiredText(input.workspaceId, 'workspaceId'),
+      input.limit,
+      input.offset,
+      normalizeOptionalText(input.projectId ?? null),
+    ],
+  );
+
+  return result.rows.map(mapActivityEntryRow);
+}
+
 function mapActivityEntryRow(row: ActivityEntryRow): ActivityEntry {
   return {
     id: row.id,

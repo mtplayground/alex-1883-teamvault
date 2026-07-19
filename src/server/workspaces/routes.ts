@@ -1,7 +1,12 @@
 import { Router, type Request, type Response } from 'express';
 
 import type { AuthConfig, EmailConfig } from '../config.js';
-import { recordActivity } from '../activity/store.js';
+import {
+  listWorkspaceActivity,
+  recordActivity,
+  type ActivityQueryable,
+} from '../activity/store.js';
+import type { ActivityEntry } from '../activity/model.js';
 import { requireAuth, type AuthenticatedLocals } from '../auth/middleware.js';
 import { getPool } from '../db/pool.js';
 import {
@@ -34,7 +39,7 @@ export interface WorkspaceRouterOptions {
   authConfig: AuthConfig | null;
   emailConfig?: EmailConfig | null;
   selfUrl?: string | null;
-  db?: WorkspaceQueryable;
+  db?: WorkspaceQueryable & ActivityQueryable;
   emailSender?: WorkspaceEmailSender;
   invitationTokenGenerator?: InvitationTokenGenerator;
   verifier?: MctaiJwtVerifier;
@@ -203,6 +208,35 @@ export function createWorkspaceRouter({
     },
   );
 
+  router.get('/:workspaceId/activity', async (req, res, next) => {
+    try {
+      const workspaceId = req.params.workspaceId;
+      await requireWorkspaceMembership(db, workspaceId, currentUserSub(res));
+      const paging = readActivityPaging(req);
+      const projectId = readOptionalQueryString(req, 'projectId');
+      const activities = await listWorkspaceActivity(db, {
+        workspaceId,
+        projectId,
+        limit: paging.limit,
+        offset: paging.offset,
+      });
+
+      res.json({
+        activities: activities.map(activityResponse),
+        paging: {
+          limit: paging.limit,
+          offset: paging.offset,
+          nextOffset:
+            activities.length === paging.limit
+              ? paging.offset + paging.limit
+              : null,
+        },
+      });
+    } catch (error) {
+      handleWorkspaceError(error, res, next);
+    }
+  });
+
   router.get('/:workspaceId', async (req, res, next) => {
     try {
       const workspaceId = req.params.workspaceId;
@@ -267,6 +301,19 @@ function invitationResponse(invitation: WorkspaceInvitation) {
   };
 }
 
+function activityResponse(activity: ActivityEntry) {
+  return {
+    id: activity.id,
+    actorSub: activity.actorSub,
+    action: activity.action,
+    workspaceId: activity.workspaceId,
+    projectId: activity.projectId,
+    documentId: activity.documentId,
+    metadata: activity.metadata,
+    createdAt: activity.createdAt.toISOString(),
+  };
+}
+
 function currentUserLocals(res: Response): AuthenticatedLocals {
   return res.locals as AuthenticatedLocals;
 }
@@ -297,6 +344,61 @@ function readInviteRole(req: Request): WorkspaceInviteRole {
   }
 
   throw new WorkspaceValidationError('role must be member or guest');
+}
+
+function readActivityPaging(req: Request): { limit: number; offset: number } {
+  return {
+    limit: readNonNegativeIntegerQuery(req, 'limit', {
+      defaultValue: 25,
+      maxValue: 100,
+      minValue: 1,
+    }),
+    offset: readNonNegativeIntegerQuery(req, 'offset', {
+      defaultValue: 0,
+      maxValue: 10_000,
+      minValue: 0,
+    }),
+  };
+}
+
+function readNonNegativeIntegerQuery(
+  req: Request,
+  key: string,
+  options: { defaultValue: number; minValue: number; maxValue: number },
+): number {
+  const raw = readOptionalQueryString(req, key);
+
+  if (raw === null) {
+    return options.defaultValue;
+  }
+
+  if (!/^\d+$/.test(raw)) {
+    throw new WorkspaceValidationError(`${key} must be a whole number`);
+  }
+
+  const value = Number.parseInt(raw, 10);
+  if (value < options.minValue || value > options.maxValue) {
+    throw new WorkspaceValidationError(
+      `${key} must be between ${options.minValue} and ${options.maxValue}`,
+    );
+  }
+
+  return value;
+}
+
+function readOptionalQueryString(req: Request, key: string): string | null {
+  const value = req.query[key];
+
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+
+  if (typeof value !== 'string') {
+    throw new WorkspaceValidationError(`${key} must be text`);
+  }
+
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
 }
 
 function handleWorkspaceError(
