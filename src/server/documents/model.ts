@@ -38,6 +38,11 @@ export interface NewProjectDocumentShareInput {
   sharedBySub: string;
 }
 
+export interface ProjectDocumentShareUpsertResult {
+  share: ProjectDocumentShare;
+  isNew: boolean;
+}
+
 export function normalizeDocumentFileName(fileName: string): string {
   const normalized = fileName.trim().split(/[\\/]/).filter(Boolean).pop() ?? '';
 

@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   createProjectDocumentShare,
   createProjectDocument,
+  deleteProjectDocumentShare,
   getProjectDocument,
   isProjectDocumentSharedWithUser,
   listProjectDocuments,
@@ -102,13 +103,14 @@ test('creates document shares for workspace users', async () => {
             user_sub: values?.[3],
             shared_by_sub: values?.[4],
             created_at: now,
+            inserted: true,
           },
         ] as T[],
       };
     },
   };
 
-  const share = await createProjectDocumentShare(db, {
+  const result = await createProjectDocumentShare(db, {
     documentId: ' document-1 ',
     workspaceId: ' workspace-1 ',
     projectId: ' project-1 ',
@@ -116,6 +118,8 @@ test('creates document shares for workspace users', async () => {
     sharedBySub: ' auth|owner ',
   });
 
+  assert.equal(result.isNew, true);
+  const { share } = result;
   assert.equal(share.documentId, 'document-1');
   assert.equal(share.workspaceId, 'workspace-1');
   assert.equal(share.projectId, 'project-1');
@@ -150,6 +154,28 @@ test('checks whether a document is shared with a user', async () => {
 
   assert.equal(isShared, true);
   assert.match(queries[0]?.sql ?? '', /from project_document_shares/);
+  assert.deepEqual(queries[0]?.values, ['document-1', 'auth|guest']);
+});
+
+test('deletes document shares idempotently', async () => {
+  const queries: Array<{
+    sql: string;
+    values: readonly unknown[] | undefined;
+  }> = [];
+  const db: DocumentQueryable = {
+    query: async <T>(sql: string, values?: readonly unknown[]) => {
+      queries.push({ sql, values });
+      return { rows: [{ document_id: 'document-1' }] as T[] };
+    },
+  };
+
+  const deleted = await deleteProjectDocumentShare(db, {
+    documentId: ' document-1 ',
+    userSub: ' auth|guest ',
+  });
+
+  assert.equal(deleted, true);
+  assert.match(queries[0]?.sql ?? '', /delete from project_document_shares/);
   assert.deepEqual(queries[0]?.values, ['document-1', 'auth|guest']);
 });
 

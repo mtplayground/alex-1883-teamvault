@@ -6,25 +6,39 @@ import {
   type Response,
 } from 'express';
 
-import type { AuthConfig, StorageConfig } from '../config.js';
+import type { AuthConfig, EmailConfig, StorageConfig } from '../config.js';
 import { requireAuth, type AuthenticatedLocals } from '../auth/middleware.js';
 import { getPool } from '../db/pool.js';
 import type { MctaiJwtVerifier } from '../auth/session.js';
 import { requireWorkspaceMembership } from '../workspaces/store.js';
-import type { WorkspaceRole } from '../workspaces/model.js';
+import { parseWorkspaceRole, type WorkspaceRole } from '../workspaces/model.js';
 import { roleCan } from '../workspaces/permissions.js';
 import {
   saveProjectDocument,
   type RetrievedProjectDocument,
 } from '../documents/service.js';
-import type { ProjectDocument } from '../documents/model.js';
+import type {
+  ProjectDocument,
+  ProjectDocumentShare,
+} from '../documents/model.js';
 import {
+  createProjectDocumentShare,
+  deleteProjectDocumentShare,
   getProjectDocument,
   isProjectDocumentSharedWithUser,
   listProjectDocuments,
   ProjectDocumentNotFoundError,
 } from '../documents/store.js';
-import { roleCanAccessDocument } from '../documents/permissions.js';
+import {
+  roleCanAccessDocument,
+  roleCanShareDocument,
+} from '../documents/permissions.js';
+import {
+  createEmailClient,
+  type EmailSendResult,
+  type SendEmailInput,
+} from '../email/client.js';
+import { createEmailTemplates } from '../email/templates.js';
 import { S3ObjectStorage, type ObjectStorage } from '../storage/s3.js';
 import {
   roleCanCreateProject,
@@ -45,10 +59,17 @@ import type { Project } from './model.js';
 
 export interface ProjectRouterOptions {
   authConfig: AuthConfig | null;
+  emailConfig?: EmailConfig | null;
+  selfUrl?: string | null;
   storageConfig?: StorageConfig | null;
   storage?: ObjectStorage | null;
   db?: ProjectQueryable;
+  emailSender?: ProjectEmailSender;
   verifier?: MctaiJwtVerifier;
+}
+
+export interface ProjectEmailSender {
+  send(input: SendEmailInput): Promise<EmailSendResult>;
 }
 
 class ProjectValidationError extends Error {}
@@ -71,9 +92,12 @@ const acceptedDocumentContentTypes = new Set([
 
 export function createProjectRouter({
   authConfig,
+  emailConfig = null,
+  selfUrl = null,
   storageConfig,
   storage,
   db = getPool(),
+  emailSender = createEmailClient({ config: emailConfig }),
   verifier,
 }: ProjectRouterOptions): Router {
   const router = Router();
@@ -205,6 +229,113 @@ export function createProjectRouter({
         });
 
         res.json({ documents: documents.map(documentResponse) });
+      } catch (error) {
+        handleProjectError(error, res, next);
+      }
+    },
+  );
+
+  router.post(
+    '/:workspaceId/projects/:projectId/documents/:documentId/shares',
+    async (req, res, next) => {
+      try {
+        const workspaceId = req.params.workspaceId;
+        const projectId = req.params.projectId;
+        const documentId = req.params.documentId;
+        const currentUser = currentUserLocals(res);
+        const role = await requireWorkspaceMembership(
+          db,
+          workspaceId,
+          currentUser.currentUser.sub,
+        );
+        const document = await getProjectDocument(db, {
+          workspaceId,
+          projectId,
+          documentId,
+        });
+        const hasProjectAccess = await canAccessProject(db, {
+          workspaceId,
+          projectId,
+          userSub: currentUser.currentUser.sub,
+          role,
+        });
+
+        if (!roleCanShareDocument(role, { hasProjectAccess })) {
+          throw new ProjectPermissionError(
+            'Only project owners and members can share documents',
+          );
+        }
+
+        const targetUserSub = readBodyString(req, 'userSub');
+        const recipient = await getWorkspaceShareRecipient(db, {
+          workspaceId,
+          userSub: targetUserSub,
+        });
+        const shareResult = await createProjectDocumentShare(db, {
+          documentId: document.id,
+          workspaceId,
+          projectId,
+          userSub: recipient.userSub,
+          sharedBySub: currentUser.currentUser.sub,
+        });
+        const email = shareResult.isNew
+          ? await sendDocumentSharedEmail({
+              req,
+              selfUrl,
+              emailSender,
+              currentUser: currentUser.currentUser,
+              recipient,
+              document,
+            })
+          : null;
+
+        res.status(shareResult.isNew ? 201 : 200).json({
+          share: documentShareResponse(shareResult.share),
+          email,
+        });
+      } catch (error) {
+        handleProjectError(error, res, next);
+      }
+    },
+  );
+
+  router.delete(
+    '/:workspaceId/projects/:projectId/documents/:documentId/shares/:userSub',
+    async (req, res, next) => {
+      try {
+        const workspaceId = req.params.workspaceId;
+        const projectId = req.params.projectId;
+        const documentId = req.params.documentId;
+        const currentUser = currentUserLocals(res);
+        const role = await requireWorkspaceMembership(
+          db,
+          workspaceId,
+          currentUser.currentUser.sub,
+        );
+        const document = await getProjectDocument(db, {
+          workspaceId,
+          projectId,
+          documentId,
+        });
+        const hasProjectAccess = await canAccessProject(db, {
+          workspaceId,
+          projectId,
+          userSub: currentUser.currentUser.sub,
+          role,
+        });
+
+        if (!roleCanShareDocument(role, { hasProjectAccess })) {
+          throw new ProjectPermissionError(
+            'Only project owners and members can share documents',
+          );
+        }
+
+        await deleteProjectDocumentShare(db, {
+          documentId: document.id,
+          userSub: req.params.userSub,
+        });
+
+        res.status(204).end();
       } catch (error) {
         handleProjectError(error, res, next);
       }
@@ -356,6 +487,17 @@ function documentResponse(document: ProjectDocument) {
   };
 }
 
+function documentShareResponse(share: ProjectDocumentShare) {
+  return {
+    documentId: share.documentId,
+    workspaceId: share.workspaceId,
+    projectId: share.projectId,
+    userSub: share.userSub,
+    sharedBySub: share.sharedBySub,
+    createdAt: share.createdAt.toISOString(),
+  };
+}
+
 function currentUserLocals(res: Response): AuthenticatedLocals {
   return res.locals as AuthenticatedLocals;
 }
@@ -504,6 +646,91 @@ async function canAccessProject(
   }
 }
 
+interface ProjectShareRecipient {
+  userSub: string;
+  email: string;
+  name: string | null;
+  role: WorkspaceRole;
+  workspaceName: string;
+}
+
+interface ProjectShareRecipientRow {
+  user_sub: string;
+  email: string;
+  name: string | null;
+  role: string;
+  workspace_name: string;
+}
+
+async function getWorkspaceShareRecipient(
+  db: ProjectQueryable,
+  input: { workspaceId: string; userSub: string },
+): Promise<ProjectShareRecipient> {
+  const result = await db.query<ProjectShareRecipientRow>(
+    `
+      select
+        wm.user_sub,
+        u.email,
+        u.name,
+        wm.role,
+        w.name as workspace_name
+      from workspace_memberships wm
+      join users u on u.sub = wm.user_sub
+      join workspaces w on w.id = wm.workspace_id
+      where wm.workspace_id = $1
+        and wm.user_sub = $2
+    `,
+    [
+      normalizeRequiredText(input.workspaceId, 'workspaceId'),
+      normalizeRequiredText(input.userSub, 'userSub'),
+    ],
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    throw new ProjectValidationError(
+      'Share recipient must be a workspace member',
+    );
+  }
+
+  return {
+    userSub: row.user_sub,
+    email: row.email,
+    name: row.name,
+    role: parseWorkspaceRole(row.role),
+    workspaceName: row.workspace_name,
+  };
+}
+
+async function sendDocumentSharedEmail(input: {
+  req: Request;
+  selfUrl: string | null;
+  emailSender: ProjectEmailSender;
+  currentUser: AuthenticatedLocals['currentUser'];
+  recipient: ProjectShareRecipient;
+  document: ProjectDocument;
+}): Promise<EmailSendResult> {
+  const template = createEmailTemplates({
+    baseUrl:
+      input.selfUrl ?? `${input.req.protocol}://${input.req.get('host')}`,
+    brandName: input.recipient.workspaceName,
+  }).documentShared({
+    recipientName: input.recipient.name ?? input.recipient.email,
+    sharedByName: input.currentUser.name ?? input.currentUser.email,
+    documentName: input.document.fileName,
+    documentId: input.document.id,
+    projectId: input.document.projectId,
+    workspaceName: input.recipient.workspaceName,
+  });
+
+  return input.emailSender.send({
+    to: input.recipient.email,
+    subject: template.subject,
+    html: template.html,
+    text: template.text,
+  });
+}
+
 function readRouteParam(req: Request, key: string): string {
   const value = req.params[key];
 
@@ -512,6 +739,16 @@ function readRouteParam(req: Request, key: string): string {
   }
 
   return value;
+}
+
+function normalizeRequiredText(value: string, field: string): string {
+  const normalized = value.trim();
+
+  if (normalized.length === 0) {
+    throw new ProjectValidationError(`${field} is required`);
+  }
+
+  return normalized;
 }
 
 function sendDocumentFile(

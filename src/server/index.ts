@@ -49,6 +49,8 @@ app.use(
   '/api/workspaces',
   createProjectRouter({
     authConfig: readAuthConfig(process.env),
+    emailConfig: readEmailConfig(process.env),
+    selfUrl: process.env.SELF_URL ? readSelfUrl(process.env) : null,
     storageConfig: readStorageConfig(process.env),
   }),
 );
