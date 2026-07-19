@@ -11,6 +11,7 @@ import {
   readEmailConfig,
   readRuntimeConfig,
   readSelfUrl,
+  readStorageConfig,
 } from './config.js';
 import { createAuthRouter } from './auth/routes.js';
 import { closePool, smokeTestDatabase } from './db/pool.js';
@@ -48,6 +49,7 @@ app.use(
   '/api/workspaces',
   createProjectRouter({
     authConfig: readAuthConfig(process.env),
+    storageConfig: readStorageConfig(process.env),
   }),
 );
 

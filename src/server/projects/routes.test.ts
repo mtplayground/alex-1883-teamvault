@@ -6,6 +6,7 @@ import express from 'express';
 
 import type { AuthConfig } from '../config.js';
 import type { MctaiJwtVerifier } from '../auth/session.js';
+import type { ObjectStorage, PutObjectInput } from '../storage/s3.js';
 import { createProjectRouter } from './routes.js';
 import type { ProjectQueryable } from './store.js';
 
@@ -63,13 +64,178 @@ test('guest cannot update a project', async () => {
   });
 });
 
+test('member can upload a PDF document to a project', async () => {
+  const storedObjects: PutObjectInput[] = [];
+  const db: ProjectQueryable = {
+    query: async <T>(sql: string, values?: readonly unknown[]) => {
+      if (/from users/.test(sql) || /insert into users/.test(sql)) {
+        return userRow() as { rows: T[] };
+      }
+
+      if (/from workspace_members/.test(sql)) {
+        return roleRow('member') as { rows: T[] };
+      }
+
+      if (/from projects/.test(sql)) {
+        return projectRows() as { rows: T[] };
+      }
+
+      if (/insert into project_documents/.test(sql)) {
+        return {
+          rows: [
+            {
+              id: values?.[0],
+              workspace_id: values?.[1],
+              project_id: values?.[2],
+              file_name: values?.[3],
+              content_type: values?.[4],
+              size_bytes: values?.[5],
+              uploader_sub: values?.[6],
+              storage_key: values?.[7],
+              uploaded_at: now,
+            },
+          ] as T[],
+        };
+      }
+
+      throw new Error(`Unexpected query: ${sql}`);
+    },
+  };
+  const response = await withProjectServer(
+    db,
+    (baseUrl) =>
+      fetch(
+        `${baseUrl}/api/workspaces/workspace-1/projects/project-1/documents`,
+        {
+          method: 'POST',
+          headers: {
+            cookie: 'mctai_session=valid',
+            'content-type': 'application/pdf',
+            'x-file-name': ' Launch Plan.pdf ',
+          },
+          body: Buffer.from('pdf-bytes'),
+        },
+      ),
+    {
+      storage: {
+        putObject: async (input) => {
+          storedObjects.push(input);
+        },
+        getObject: async () => {
+          throw new Error('unexpected get');
+        },
+      },
+    },
+  );
+  const body = (await response.json()) as {
+    document: { id: string; storageKey?: string; [key: string]: unknown };
+  };
+
+  assert.equal(response.status, 201);
+  assert.equal(body.document.workspaceId, 'workspace-1');
+  assert.equal(body.document.projectId, 'project-1');
+  assert.equal(body.document.fileName, 'Launch Plan.pdf');
+  assert.equal(body.document.contentType, 'application/pdf');
+  assert.equal(body.document.sizeBytes, 9);
+  assert.equal(body.document.uploaderSub, 'auth|123');
+  assert.equal(body.document.uploadedAt, now.toISOString());
+  assert.equal(storedObjects.length, 1);
+  assert.equal(storedObjects[0]?.contentType, 'application/pdf');
+  assert.equal(
+    Buffer.from(storedObjects[0]?.body ?? '').toString(),
+    'pdf-bytes',
+  );
+  assert.match(
+    storedObjects[0]?.key ?? '',
+    /^workspaces\/workspace-1\/projects\/project-1\/documents\/.+\/Launch-Plan.pdf$/,
+  );
+});
+
+test('guest cannot upload documents to a project', async () => {
+  const db = routeDb([userRow(), roleRow('guest')]);
+  const response = await withProjectServer(db, (baseUrl) =>
+    fetch(
+      `${baseUrl}/api/workspaces/workspace-1/projects/project-1/documents`,
+      {
+        method: 'POST',
+        headers: {
+          cookie: 'mctai_session=valid',
+          'content-type': 'application/pdf',
+          'x-file-name': 'Plan.pdf',
+        },
+        body: Buffer.from('pdf-bytes'),
+      },
+    ),
+  );
+
+  assert.equal(response.status, 403);
+  assert.deepEqual(await response.json(), {
+    error: 'Guests cannot upload documents',
+  });
+});
+
+test('upload rejects unsupported file types', async () => {
+  const db = routeDb([userRow(), roleRow('member'), projectRows()]);
+  const response = await withProjectServer(db, (baseUrl) =>
+    fetch(
+      `${baseUrl}/api/workspaces/workspace-1/projects/project-1/documents`,
+      {
+        method: 'POST',
+        headers: {
+          cookie: 'mctai_session=valid',
+          'content-type': 'text/plain',
+          'x-file-name': 'notes.txt',
+        },
+        body: Buffer.from('not allowed'),
+      },
+    ),
+  );
+
+  assert.equal(response.status, 415);
+  assert.deepEqual(await response.json(), {
+    error: 'Only PDF, PNG, JPEG, GIF, and WebP files are supported',
+  });
+});
+
+test('upload rejects files over the maximum size', async () => {
+  const db = routeDb([userRow()]);
+  const response = await withProjectServer(db, (baseUrl) =>
+    fetch(
+      `${baseUrl}/api/workspaces/workspace-1/projects/project-1/documents`,
+      {
+        method: 'POST',
+        headers: {
+          cookie: 'mctai_session=valid',
+          'content-type': 'application/pdf',
+          'x-file-name': 'large.pdf',
+        },
+        body: Buffer.alloc(10 * 1024 * 1024 + 1),
+      },
+    ),
+  );
+
+  assert.equal(response.status, 413);
+  assert.deepEqual(await response.json(), {
+    error: 'File must be 10485760 bytes or smaller',
+  });
+});
+
 async function withProjectServer(
   db: ProjectQueryable,
   request: (baseUrl: string) => Promise<Response>,
+  options: { storage?: ObjectStorage | null } = {},
 ): Promise<Response> {
   const app = express();
   app.use(express.json());
-  app.use('/api/workspaces', createProjectRouter({ authConfig, db, verifier }));
+  app.use(
+    '/api/workspaces',
+    createProjectRouter({
+      authConfig,
+      db,
+      verifier,
+      storage: options.storage,
+    }),
+  );
 
   const server = app.listen(0);
   try {

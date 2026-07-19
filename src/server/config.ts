@@ -59,13 +59,7 @@ export function readAppConfig(env: NodeJS.ProcessEnv): AppConfig {
     database: runtime.database,
     auth: readAuthConfig(env),
     email: readEmailConfig(env),
-    storage: {
-      endpoint: readUrl(env, 'S3_ENDPOINT_URL'),
-      region: readString(env, 'S3_REGION'),
-      bucket: readString(env, 'S3_BUCKET'),
-      accessKeyId: readString(env, 'S3_ACCESS_KEY_ID'),
-      secretAccessKey: readString(env, 'S3_SECRET_ACCESS_KEY'),
-    },
+    storage: requireStorageConfig(env),
   };
 }
 
@@ -113,6 +107,58 @@ export function readEmailConfig(env: NodeJS.ProcessEnv): EmailConfig | null {
     url: readUrl(env, 'MCTAI_EMAIL_URL'),
     appToken: readString(env, 'MCTAI_EMAIL_APP_TOKEN'),
   };
+}
+
+export function readStorageConfig(
+  env: NodeJS.ProcessEnv,
+): StorageConfig | null {
+  const hasEndpoint = hasValue(env.S3_ENDPOINT_URL);
+  const hasRegion = hasValue(env.S3_REGION);
+  const hasBucket = hasValue(env.S3_BUCKET);
+  const hasAccessKeyId = hasValue(env.S3_ACCESS_KEY_ID);
+  const hasSecretAccessKey = hasValue(env.S3_SECRET_ACCESS_KEY);
+
+  if (
+    !hasEndpoint &&
+    !hasRegion &&
+    !hasBucket &&
+    !hasAccessKeyId &&
+    !hasSecretAccessKey
+  ) {
+    return null;
+  }
+
+  if (
+    !hasEndpoint ||
+    !hasRegion ||
+    !hasBucket ||
+    !hasAccessKeyId ||
+    !hasSecretAccessKey
+  ) {
+    throw new Error(
+      'S3_ENDPOINT_URL, S3_REGION, S3_BUCKET, S3_ACCESS_KEY_ID, and S3_SECRET_ACCESS_KEY must be configured together',
+    );
+  }
+
+  return {
+    endpoint: readUrl(env, 'S3_ENDPOINT_URL'),
+    region: readString(env, 'S3_REGION'),
+    bucket: readString(env, 'S3_BUCKET'),
+    accessKeyId: readString(env, 'S3_ACCESS_KEY_ID'),
+    secretAccessKey: readString(env, 'S3_SECRET_ACCESS_KEY'),
+  };
+}
+
+function requireStorageConfig(env: NodeJS.ProcessEnv): StorageConfig {
+  const storageConfig = readStorageConfig(env);
+
+  if (!storageConfig) {
+    throw new Error(
+      'S3_ENDPOINT_URL, S3_REGION, S3_BUCKET, S3_ACCESS_KEY_ID, and S3_SECRET_ACCESS_KEY are required',
+    );
+  }
+
+  return storageConfig;
 }
 
 function readString(
