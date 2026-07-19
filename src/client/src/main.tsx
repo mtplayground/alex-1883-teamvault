@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, useMemo, useState } from 'react';
+import { StrictMode, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import type {
@@ -7,14 +7,10 @@ import type {
   PasswordResetCompleteResponse,
   PasswordResetRequestResponse,
 } from '../../shared/auth';
+import { apiFetch } from './api';
+import { AuthProvider, useAuth, type AuthState } from './auth';
 
 import './styles.css';
-
-type SessionState =
-  | { status: 'loading' }
-  | { status: 'signed-in'; data: AuthSessionResponse }
-  | { status: 'signed-out' }
-  | { status: 'unavailable'; message: string };
 
 type VerificationStatus = 'success' | 'expired' | 'unknown';
 
@@ -37,6 +33,14 @@ function App() {
     return <ResetPasswordScreen />;
   }
 
+  if (path === '/dashboard') {
+    return (
+      <ProtectedRoute>
+        <DashboardScreen />
+      </ProtectedRoute>
+    );
+  }
+
   if (path === '/signup/check-email') {
     return <CheckEmailScreen />;
   }
@@ -49,7 +53,7 @@ function App() {
 }
 
 function HomeScreen() {
-  const session = useSession();
+  const { state: session } = useAuth();
 
   if (session.status === 'loading') {
     return (
@@ -62,7 +66,7 @@ function HomeScreen() {
   }
 
   if (session.status === 'signed-in') {
-    return <SignedInHome session={session.data} />;
+    return <DashboardScreen />;
   }
 
   return (
@@ -91,6 +95,46 @@ function HomeScreen() {
       </section>
     </main>
   );
+}
+
+function ProtectedRoute({ children }: { children: React.ReactNode }) {
+  const { state } = useAuth();
+
+  if (state.status === 'loading') {
+    return (
+      <main className="app-shell centered-shell">
+        <StatusPanel title="Checking your session" tone="neutral">
+          <p>One moment while the secure session is confirmed.</p>
+        </StatusPanel>
+      </main>
+    );
+  }
+
+  if (state.status === 'signed-out') {
+    window.location.replace('/login');
+    return (
+      <main className="app-shell centered-shell">
+        <StatusPanel title="Redirecting to sign in" tone="neutral">
+          <p>Protected pages require an active secure session.</p>
+        </StatusPanel>
+      </main>
+    );
+  }
+
+  if (state.status === 'unavailable') {
+    return (
+      <main className="app-shell centered-shell">
+        <StatusPanel title="Session unavailable" tone="warning">
+          <p>{state.message}</p>
+          <a className="button primary-button" href="/login">
+            Sign in again
+          </a>
+        </StatusPanel>
+      </main>
+    );
+  }
+
+  return <>{children}</>;
 }
 
 function LoginScreen() {
@@ -141,7 +185,14 @@ function LoginScreen() {
   );
 }
 
-function SignedInHome({ session }: { session: AuthSessionResponse }) {
+function DashboardScreen() {
+  const { state, signOut } = useAuth();
+  const session = signedInSession(state);
+
+  if (!session) {
+    return null;
+  }
+
   return (
     <main className="app-shell signed-in-shell">
       <header className="topbar">
@@ -149,7 +200,18 @@ function SignedInHome({ session }: { session: AuthSessionResponse }) {
           <p className="eyebrow">Signed in</p>
           <h1>Document workspace</h1>
         </div>
-        <UserBadge user={session.user} />
+        <div className="topbar-actions">
+          <UserBadge user={session.user} />
+          <button
+            className="button secondary-button"
+            type="button"
+            onClick={() => {
+              void signOut();
+            }}
+          >
+            Sign out
+          </button>
+        </div>
       </header>
 
       <section className="dashboard-grid" aria-label="Workspace overview">
@@ -329,9 +391,8 @@ function ForgotPasswordScreen() {
     setStatus({ type: 'submitting', error: null });
 
     try {
-      const response = await fetch('/api/auth/password-reset/request', {
+      const response = await apiFetch('/api/auth/password-reset/request', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: normalizedEmail }),
       });
 
@@ -428,9 +489,8 @@ function ResetPasswordScreen() {
     setStatus({ type: 'submitting' });
 
     try {
-      const response = await fetch('/api/auth/password-reset/complete', {
+      const response = await apiFetch('/api/auth/password-reset/complete', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           token: new URLSearchParams(window.location.search).get('token'),
         }),
@@ -549,51 +609,6 @@ function DocumentPreview() {
   );
 }
 
-function useSession(): SessionState {
-  const [session, setSession] = useState<SessionState>({ status: 'loading' });
-
-  useEffect(() => {
-    const controller = new AbortController();
-
-    async function loadSession() {
-      try {
-        const response = await fetch('/api/auth/session', {
-          signal: controller.signal,
-        });
-
-        if (response.status === 401 || response.status === 403) {
-          setSession({ status: 'signed-out' });
-          return;
-        }
-
-        if (!response.ok) {
-          throw new Error(`Session check failed with ${response.status}`);
-        }
-
-        setSession({
-          status: 'signed-in',
-          data: (await response.json()) as AuthSessionResponse,
-        });
-      } catch (error) {
-        if (controller.signal.aborted) return;
-        setSession({
-          status: 'unavailable',
-          message:
-            error instanceof Error
-              ? error.message
-              : 'Unable to confirm the current session.',
-        });
-      }
-    }
-
-    void loadSession();
-
-    return () => controller.abort();
-  }, []);
-
-  return session;
-}
-
 function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
@@ -602,8 +617,14 @@ function initialFor(user: CurrentUser): string {
   return (user.name ?? user.email).trim().charAt(0).toUpperCase();
 }
 
+function signedInSession(state: AuthState): AuthSessionResponse | null {
+  return state.status === 'signed-in' ? state.data : null;
+}
+
 createRoot(document.getElementById('root') as HTMLElement).render(
   <StrictMode>
-    <App />
+    <AuthProvider>
+      <App />
+    </AuthProvider>
   </StrictMode>,
 );

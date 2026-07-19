@@ -248,6 +248,12 @@ button:disabled,
   align-items: center;
 }
 
+.topbar-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
 .topbar h1 {
   margin-bottom: 0;
   font-size: clamp(2rem, 4vw, 3.8rem);
@@ -427,6 +433,11 @@ input[aria-invalid='true'] {
   }
 
   .topbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .topbar-actions {
     align-items: stretch;
     flex-direction: column;
   }
