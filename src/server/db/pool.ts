@@ -1,5 +1,6 @@
 import pg from 'pg';
 
+import type { DatabaseConfig } from './config.js';
 import { readDatabaseConfig } from './config.js';
 
 const { Pool } = pg;
@@ -9,13 +10,7 @@ let pool: pg.Pool | null = null;
 export function getPool(): pg.Pool {
   if (pool) return pool;
 
-  const config = readDatabaseConfig(process.env);
-  pool = new Pool({
-    connectionString: config.connectionString,
-    max: config.maxConnections,
-    connectionTimeoutMillis: config.connectionTimeoutMillis,
-    ssl: config.ssl,
-  });
+  pool = createPool(readDatabaseConfig(process.env));
 
   pool.on('error', (error) => {
     console.error('Unexpected PostgreSQL pool error', {
@@ -26,6 +21,15 @@ export function getPool(): pg.Pool {
   });
 
   return pool;
+}
+
+export function createPool(config: DatabaseConfig): pg.Pool {
+  return new Pool({
+    connectionString: config.connectionString,
+    max: config.maxConnections,
+    connectionTimeoutMillis: config.connectionTimeoutMillis,
+    ssl: config.ssl,
+  });
 }
 
 export async function closePool(): Promise<void> {

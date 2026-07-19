@@ -6,14 +6,14 @@ import express, {
   type RequestHandler,
 } from 'express';
 
+import { readRuntimeConfig } from './config.js';
 import { closePool, smokeTestDatabase } from './db/pool.js';
 import type { HealthResponse } from '../shared/health.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const host = process.env.HOST ?? '0.0.0.0';
-const port = Number.parseInt(process.env.PORT ?? '8080', 10);
+const config = readRuntimeConfig(process.env);
 const clientDistPath = path.resolve(__dirname, '../../client');
 
 const app = express();
@@ -77,8 +77,10 @@ const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
 
 app.use(errorHandler);
 
-app.listen(port, host, () => {
-  console.log(`Server listening on http://${host}:${port}`);
+app.listen(config.server.port, config.server.host, () => {
+  console.log(
+    `Server listening on http://${config.server.host}:${config.server.port}`,
+  );
 });
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
