@@ -156,5 +156,16 @@ function getReturnToUrl(
   configuredSelfUrl: string | null | undefined,
 ) {
   const selfUrl = configuredSelfUrl ?? `${req.protocol}://${req.get('host')}`;
+  const requestedReturnTo = req.query.return_to;
+
+  if (
+    typeof requestedReturnTo === 'string' &&
+    requestedReturnTo.startsWith('/') &&
+    !requestedReturnTo.startsWith('//') &&
+    !requestedReturnTo.startsWith('/api/')
+  ) {
+    return new URL(requestedReturnTo, selfUrl).toString();
+  }
+
   return new URL('/', selfUrl).toString();
 }

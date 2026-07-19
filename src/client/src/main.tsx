@@ -49,6 +49,17 @@ interface PendingInvitationsResponse {
   invitations: WorkspaceInvitationResponse[];
 }
 
+interface InvitationAcceptResponse {
+  invitation: WorkspaceInvitationResponse;
+  membership: {
+    workspaceId: string;
+    userSub: string;
+    role: WorkspaceRole;
+    createdAt: string;
+    updatedAt: string;
+  };
+}
+
 const activeWorkspaceStorageKey = 'active-workspace-id';
 
 function App() {
@@ -84,6 +95,10 @@ function App() {
 
   if (path === '/verify') {
     return <VerificationResultScreen />;
+  }
+
+  if (path === '/invitations/accept') {
+    return <InvitationAcceptScreen />;
   }
 
   return <HomeScreen />;
@@ -886,6 +901,157 @@ function ResetPasswordScreen() {
   );
 }
 
+function InvitationAcceptScreen() {
+  const { state } = useAuth();
+  const token = useMemo(
+    () => new URLSearchParams(window.location.search).get('token') ?? '',
+    [],
+  );
+  const [acceptance, setAcceptance] = useState<
+    | { type: 'idle' }
+    | { type: 'joining' }
+    | {
+        type: 'joined';
+        workspace: WorkspaceDetailsResponse;
+        membership: InvitationAcceptResponse['membership'];
+      }
+    | { type: 'error'; message: string }
+  >({ type: 'idle' });
+
+  useEffect(() => {
+    if (state.status !== 'signed-in' || !token || acceptance.type !== 'idle') {
+      return;
+    }
+
+    async function acceptInvitation() {
+      setAcceptance({ type: 'joining' });
+
+      try {
+        const result = await acceptInvitationToken(token);
+        const workspace = await fetchWorkspaceDetails(
+          result.membership.workspaceId,
+        );
+
+        window.localStorage.setItem(
+          activeWorkspaceStorageKey,
+          result.membership.workspaceId,
+        );
+        setAcceptance({
+          type: 'joined',
+          workspace,
+          membership: result.membership,
+        });
+      } catch (error) {
+        setAcceptance({
+          type: 'error',
+          message:
+            error instanceof Error
+              ? error.message
+              : 'Unable to accept this invitation.',
+        });
+      }
+    }
+
+    void acceptInvitation();
+  }, [state.status, token, acceptance.type]);
+
+  if (!token) {
+    return (
+      <main className="app-shell centered-shell">
+        <StatusPanel title="Invitation unavailable" tone="warning">
+          <p>This invitation link is missing its secure token.</p>
+          <a className="button primary-button" href="/dashboard">
+            Open dashboard
+          </a>
+        </StatusPanel>
+      </main>
+    );
+  }
+
+  if (state.status === 'loading') {
+    return (
+      <main className="app-shell centered-shell">
+        <StatusPanel title="Checking your session" tone="neutral">
+          <p>One moment while the secure session is confirmed.</p>
+        </StatusPanel>
+      </main>
+    );
+  }
+
+  if (state.status === 'signed-out') {
+    const returnTo = `${window.location.pathname}${window.location.search}`;
+
+    return (
+      <main className="app-shell centered-shell">
+        <section className="form-panel" aria-labelledby="invite-signin-title">
+          <p className="eyebrow">Workspace invitation</p>
+          <h1 id="invite-signin-title">Sign in to join.</h1>
+          <p className="summary compact-summary">
+            Continue through the secure sign-in service. After sign-in, this
+            invitation page will finish adding your verified account.
+          </p>
+          <a
+            className="button primary-button full-button"
+            href={`/api/auth/login?return_to=${encodeURIComponent(returnTo)}`}
+          >
+            Continue securely
+          </a>
+        </section>
+      </main>
+    );
+  }
+
+  if (state.status === 'unavailable') {
+    return (
+      <main className="app-shell centered-shell">
+        <StatusPanel title="Session unavailable" tone="warning">
+          <p>{state.message}</p>
+          <a className="button primary-button" href="/login">
+            Sign in again
+          </a>
+        </StatusPanel>
+      </main>
+    );
+  }
+
+  if (acceptance.type === 'joined') {
+    return (
+      <main className="app-shell centered-shell">
+        <StatusPanel title="Workspace joined" tone="success">
+          <p>
+            You joined {acceptance.workspace.workspace.name} as{' '}
+            {acceptance.membership.role}.
+          </p>
+          <a className="button primary-button" href="/dashboard">
+            Open workspace
+          </a>
+        </StatusPanel>
+      </main>
+    );
+  }
+
+  if (acceptance.type === 'error') {
+    return (
+      <main className="app-shell centered-shell">
+        <StatusPanel title="Invitation unavailable" tone="warning">
+          <p>{friendlyInvitationError(acceptance.message)}</p>
+          <a className="button primary-button" href="/dashboard">
+            Open dashboard
+          </a>
+        </StatusPanel>
+      </main>
+    );
+  }
+
+  return (
+    <main className="app-shell centered-shell">
+      <StatusPanel title="Joining workspace" tone="neutral">
+        <p>Confirming the invitation and adding your verified account.</p>
+      </StatusPanel>
+    </main>
+  );
+}
+
 async function createWorkspaceRequest(
   name: string,
 ): Promise<WorkspaceDetailsResponse> {
@@ -948,6 +1114,17 @@ async function revokeWorkspaceInvitation(
   );
 
   await readApiResponse<unknown>(response);
+}
+
+async function acceptInvitationToken(
+  token: string,
+): Promise<InvitationAcceptResponse> {
+  const response = await apiFetch('/api/workspaces/invitations/accept', {
+    method: 'POST',
+    body: JSON.stringify({ token }),
+  });
+
+  return readApiResponse<InvitationAcceptResponse>(response);
 }
 
 async function readApiResponse<T>(response: Response): Promise<T> {
@@ -1032,6 +1209,22 @@ function formatDate(value: string): string {
     day: 'numeric',
     year: 'numeric',
   }).format(new Date(value));
+}
+
+function friendlyInvitationError(message: string): string {
+  if (/expired/i.test(message)) {
+    return 'This invitation has expired. Ask the workspace owner for a new invite.';
+  }
+
+  if (/already been used/i.test(message)) {
+    return 'This invitation has already been used. Open the dashboard to continue.';
+  }
+
+  if (/different email/i.test(message)) {
+    return 'This invitation was sent to a different verified email address.';
+  }
+
+  return message;
 }
 
 function initialFor(user: CurrentUser): string {
