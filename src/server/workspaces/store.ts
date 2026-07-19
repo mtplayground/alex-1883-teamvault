@@ -69,6 +69,18 @@ export interface IssueWorkspaceInvitationResult {
   token: string;
 }
 
+export interface AcceptWorkspaceInvitationInput {
+  token: string;
+  userSub: string;
+  userEmail: string;
+  now?: Date;
+}
+
+export interface AcceptWorkspaceInvitationResult {
+  invitation: WorkspaceInvitation;
+  membership: WorkspaceMembership;
+}
+
 export type InvitationTokenGenerator = () => string;
 
 export class WorkspaceNotFoundError extends Error {
@@ -79,6 +91,15 @@ export class WorkspaceNotFoundError extends Error {
 
 export class WorkspacePermissionError extends Error {
   constructor(message = 'Workspace permission denied') {
+    super(message);
+  }
+}
+
+export class WorkspaceInvitationError extends Error {
+  constructor(
+    message: string,
+    public readonly statusCode: number,
+  ) {
     super(message);
   }
 }
@@ -349,6 +370,91 @@ export function hashInvitationToken(token: string): string {
     .digest('hex');
 }
 
+export async function acceptWorkspaceInvitation(
+  db: WorkspaceQueryable,
+  input: AcceptWorkspaceInvitationInput,
+): Promise<AcceptWorkspaceInvitationResult> {
+  const tokenHash = hashInvitationToken(input.token);
+  const userSub = normalizeRequiredText(input.userSub, 'userSub');
+  const userEmail = normalizeEmail(input.userEmail);
+  const invitation = await findWorkspaceInvitationByTokenHash(db, tokenHash);
+
+  assertInvitationCanBeAccepted(invitation, userEmail, input.now ?? new Date());
+
+  const result = await db.query<
+    WorkspaceInvitationRow & {
+      member_workspace_id: string;
+      member_user_sub: string;
+      member_role: string;
+      member_created_at: Date;
+      member_updated_at: Date;
+    }
+  >(
+    `
+      with accepted_invitation as (
+        update workspace_invitations
+        set accepted_at = now(),
+            updated_at = now()
+        where id = $1
+          and accepted_at is null
+          and revoked_at is null
+        returning
+          id,
+          workspace_id,
+          email,
+          role,
+          token_hash,
+          invited_by_sub,
+          created_at,
+          updated_at,
+          expires_at,
+          accepted_at,
+          revoked_at
+      ),
+      membership as (
+        insert into workspace_memberships (workspace_id, user_sub, role)
+        select workspace_id, $2, role
+        from accepted_invitation
+        on conflict (workspace_id, user_sub) do update set
+          role = excluded.role,
+          updated_at = now()
+        returning
+          workspace_id as member_workspace_id,
+          user_sub as member_user_sub,
+          role as member_role,
+          created_at as member_created_at,
+          updated_at as member_updated_at
+      )
+      select
+        accepted_invitation.*,
+        membership.member_workspace_id,
+        membership.member_user_sub,
+        membership.member_role,
+        membership.member_created_at,
+        membership.member_updated_at
+      from accepted_invitation
+      join membership on true
+    `,
+    [invitation.id, userSub],
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    throw new WorkspaceInvitationError('Invitation has already been used', 410);
+  }
+
+  return {
+    invitation: mapWorkspaceInvitationRow(row),
+    membership: {
+      workspaceId: row.member_workspace_id,
+      userSub: row.member_user_sub,
+      role: parseWorkspaceRole(row.member_role),
+      createdAt: row.member_created_at,
+      updatedAt: row.member_updated_at,
+    },
+  };
+}
+
 async function findWorkspace(
   db: WorkspaceQueryable,
   workspaceId: string,
@@ -364,6 +470,63 @@ async function findWorkspace(
 
   const row = result.rows[0];
   return row ? mapWorkspaceRow(row) : null;
+}
+
+async function findWorkspaceInvitationByTokenHash(
+  db: WorkspaceQueryable,
+  tokenHash: string,
+): Promise<WorkspaceInvitation> {
+  const result = await db.query<WorkspaceInvitationRow>(
+    `
+      select
+        id,
+        workspace_id,
+        email,
+        role,
+        token_hash,
+        invited_by_sub,
+        created_at,
+        updated_at,
+        expires_at,
+        accepted_at,
+        revoked_at
+      from workspace_invitations
+      where token_hash = $1
+    `,
+    [tokenHash],
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    throw new WorkspaceInvitationError('Invitation token is invalid', 400);
+  }
+
+  return mapWorkspaceInvitationRow(row);
+}
+
+function assertInvitationCanBeAccepted(
+  invitation: WorkspaceInvitation,
+  userEmail: string,
+  now: Date,
+): void {
+  if (invitation.revokedAt) {
+    throw new WorkspaceInvitationError('Invitation has been revoked', 410);
+  }
+
+  if (invitation.acceptedAt) {
+    throw new WorkspaceInvitationError('Invitation has already been used', 410);
+  }
+
+  if (invitation.expiresAt <= now) {
+    throw new WorkspaceInvitationError('Invitation has expired', 410);
+  }
+
+  if (invitation.email !== userEmail) {
+    throw new WorkspaceInvitationError(
+      'Invitation was sent to a different email address',
+      403,
+    );
+  }
 }
 
 function mapWorkspaceRow(row: WorkspaceRow): Workspace {

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  acceptWorkspaceInvitation,
   createWorkspace,
   hashInvitationToken,
   issueWorkspaceInvitation,
@@ -162,6 +163,110 @@ test('rejects owner invitations', async () => {
   );
 });
 
+test('accepts a valid invitation and creates workspace membership', async () => {
+  const db = sequenceDb([
+    {
+      rows: [
+        invitationRow({
+          email: 'lee@example.test',
+          role: 'member',
+          tokenHash: hashInvitationToken('valid-token'),
+        }),
+      ],
+    },
+    {
+      rows: [
+        acceptedInvitationRow({
+          email: 'lee@example.test',
+          role: 'member',
+        }),
+      ],
+    },
+  ]);
+
+  const result = await acceptWorkspaceInvitation(db, {
+    token: 'valid-token',
+    userSub: ' auth|lee ',
+    userEmail: ' Lee@Example.Test ',
+    now,
+  });
+
+  assert.equal(result.invitation.acceptedAt?.toISOString(), now.toISOString());
+  assert.equal(result.membership.workspaceId, 'workspace-1');
+  assert.equal(result.membership.userSub, 'auth|lee');
+  assert.equal(result.membership.role, 'member');
+});
+
+test('rejects expired and already-used invitations', async () => {
+  await assert.rejects(
+    () =>
+      acceptWorkspaceInvitation(
+        sequenceDb([
+          {
+            rows: [
+              invitationRow({
+                email: 'lee@example.test',
+                role: 'guest',
+                expiresAt: new Date('2026-07-18T00:00:00.000Z'),
+              }),
+            ],
+          },
+        ]),
+        {
+          token: 'expired-token',
+          userSub: 'auth|lee',
+          userEmail: 'lee@example.test',
+          now,
+        },
+      ),
+    /Invitation has expired/,
+  );
+
+  await assert.rejects(
+    () =>
+      acceptWorkspaceInvitation(
+        sequenceDb([
+          {
+            rows: [
+              invitationRow({
+                email: 'lee@example.test',
+                role: 'member',
+                acceptedAt: now,
+              }),
+            ],
+          },
+        ]),
+        {
+          token: 'used-token',
+          userSub: 'auth|lee',
+          userEmail: 'lee@example.test',
+          now,
+        },
+      ),
+    /already been used/,
+  );
+});
+
+test('rejects invitations for a different verified email', async () => {
+  await assert.rejects(
+    () =>
+      acceptWorkspaceInvitation(
+        sequenceDb([
+          {
+            rows: [invitationRow({ email: 'lee@example.test', role: 'guest' })],
+          },
+        ]),
+        {
+          token: 'valid-token',
+          userSub: 'auth|other',
+          userEmail: 'other@example.test',
+          now,
+        },
+      ),
+    /different email/,
+  );
+});
+
 function membershipDb(role: 'owner' | 'member' | 'guest' | null) {
   return {
     query: async <T>() => ({
@@ -187,11 +292,15 @@ function invitationRow({
   email,
   role,
   tokenHash = hashInvitationToken('token'),
+  expiresAt = new Date('2026-07-26T00:00:00.000Z'),
+  acceptedAt = null,
   revokedAt = null,
 }: {
   email: string;
   role: 'member' | 'guest';
   tokenHash?: string;
+  expiresAt?: Date;
+  acceptedAt?: Date | null;
   revokedAt?: Date | null;
 }) {
   return {
@@ -203,8 +312,30 @@ function invitationRow({
     invited_by_sub: 'auth|123',
     created_at: now,
     updated_at: now,
-    expires_at: new Date('2026-07-26T00:00:00.000Z'),
-    accepted_at: null,
+    expires_at: expiresAt,
+    accepted_at: acceptedAt,
     revoked_at: revokedAt,
+  };
+}
+
+function acceptedInvitationRow({
+  email,
+  role,
+}: {
+  email: string;
+  role: 'member' | 'guest';
+}) {
+  return {
+    ...invitationRow({
+      email,
+      role,
+      tokenHash: hashInvitationToken('valid-token'),
+      acceptedAt: now,
+    }),
+    member_workspace_id: 'workspace-1',
+    member_user_sub: 'auth|lee',
+    member_role: role,
+    member_created_at: now,
+    member_updated_at: now,
   };
 }
