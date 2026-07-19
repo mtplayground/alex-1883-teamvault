@@ -548,6 +548,39 @@ button:disabled,
   margin-top: 4px;
 }
 
+.viewer-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.document-viewer-frame,
+.document-viewer-image,
+.viewer-fallback {
+  width: 100%;
+  min-height: min(72vh, 760px);
+  border: 1px solid #d8dee6;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.document-viewer-frame {
+  display: block;
+}
+
+.document-viewer-image {
+  max-height: 72vh;
+  object-fit: contain;
+}
+
+.viewer-fallback {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 14px;
+  padding: 28px;
+  text-align: center;
+}
+
 .project-form {
   grid-template-columns: minmax(220px, 1fr);
 }
