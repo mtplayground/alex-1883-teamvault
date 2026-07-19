@@ -15,6 +15,7 @@ export function getPool(): pg.Pool {
   pool.on('error', (error) => {
     console.error('Unexpected PostgreSQL pool error', {
       name: error.name,
+      code: 'code' in error ? (error as { code?: unknown }).code : undefined,
       message: error.message,
       stack: error.stack,
     });

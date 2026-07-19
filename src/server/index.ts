@@ -73,7 +73,16 @@ const healthHandler: RequestHandler = async (_req, res) => {
   } catch (error) {
     console.error('Health check failed', {
       name: error instanceof Error ? error.name : undefined,
+      code:
+        error instanceof Error && 'code' in error
+          ? (error as { code?: unknown }).code
+          : undefined,
       message: error instanceof Error ? error.message : String(error),
+      httpStatus:
+        error instanceof Error && '$metadata' in error
+          ? (error as { $metadata?: { httpStatusCode?: unknown } }).$metadata
+              ?.httpStatusCode
+          : undefined,
       stack: error instanceof Error ? error.stack : undefined,
     });
 
@@ -101,7 +110,16 @@ app.get('*', (_req, res) => {
 const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
   console.error('Unhandled request error', {
     name: err instanceof Error ? err.name : undefined,
+    code:
+      err instanceof Error && 'code' in err
+        ? (err as { code?: unknown }).code
+        : undefined,
     message: err instanceof Error ? err.message : String(err),
+    httpStatus:
+      err instanceof Error && '$metadata' in err
+        ? (err as { $metadata?: { httpStatusCode?: unknown } }).$metadata
+            ?.httpStatusCode
+        : undefined,
     stack: err instanceof Error ? err.stack : undefined,
   });
 
