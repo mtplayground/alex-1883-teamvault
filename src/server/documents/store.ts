@@ -192,6 +192,47 @@ export async function isProjectDocumentSharedWithUser(
   return Boolean(result.rows[0]);
 }
 
+export async function listProjectDocumentShares(
+  db: DocumentQueryable,
+  input: { documentId: string },
+): Promise<ProjectDocumentShare[]> {
+  const result = await db.query<ProjectDocumentShareRow>(
+    `
+      select document_id, workspace_id, project_id, user_sub, shared_by_sub, created_at, false as inserted
+      from project_document_shares
+      where document_id = $1
+      order by created_at asc, user_sub asc
+    `,
+    [normalizeRequiredText(input.documentId, 'documentId')],
+  );
+
+  return result.rows.map(mapProjectDocumentShareRow);
+}
+
+export async function listProjectDocumentsSharedWithUser(
+  db: DocumentQueryable,
+  input: { workspaceId: string; projectId: string; userSub: string },
+): Promise<ProjectDocument[]> {
+  const result = await db.query<ProjectDocumentRow>(
+    `
+      select pd.id, pd.workspace_id, pd.project_id, pd.file_name, pd.content_type, pd.size_bytes, pd.uploader_sub, pd.storage_key, pd.uploaded_at
+      from project_documents pd
+      join project_document_shares pds on pds.document_id = pd.id
+      where pd.workspace_id = $1
+        and pd.project_id = $2
+        and pds.user_sub = $3
+      order by pd.uploaded_at desc, pd.file_name asc
+    `,
+    [
+      normalizeRequiredText(input.workspaceId, 'workspaceId'),
+      normalizeRequiredText(input.projectId, 'projectId'),
+      normalizeRequiredText(input.userSub, 'userSub'),
+    ],
+  );
+
+  return result.rows.map(mapProjectDocumentRow);
+}
+
 export async function deleteProjectDocumentShare(
   db: DocumentQueryable,
   input: { documentId: string; userSub: string },

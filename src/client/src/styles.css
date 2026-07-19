@@ -548,6 +548,56 @@ button:disabled,
   margin-top: 4px;
 }
 
+.share-controls {
+  display: grid;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #e1e6ec;
+}
+
+.share-heading {
+  color: #25313f;
+  font-weight: 900;
+}
+
+.share-list {
+  display: grid;
+  gap: 8px;
+  padding: 0;
+  margin: 8px 0 0;
+  list-style: none;
+}
+
+.share-list li,
+.share-form-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.share-list li {
+  justify-content: space-between;
+}
+
+.share-list span {
+  color: #536173;
+  overflow-wrap: anywhere;
+}
+
+.share-form {
+  gap: 8px;
+}
+
+.share-form-row select {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.share-status,
+.success-text {
+  color: #22663d;
+}
+
 .viewer-panel {
   display: grid;
   gap: 18px;
@@ -739,6 +789,8 @@ textarea[aria-invalid='true'] {
 
   .form-row,
   .member-row,
+  .share-form-row,
+  .share-list li,
   .panel-heading {
     align-items: stretch;
     flex-direction: column;

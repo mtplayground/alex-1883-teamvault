@@ -7,7 +7,9 @@ import {
   deleteProjectDocumentShare,
   getProjectDocument,
   isProjectDocumentSharedWithUser,
+  listProjectDocumentShares,
   listProjectDocuments,
+  listProjectDocumentsSharedWithUser,
   ProjectDocumentNotFoundError,
   type DocumentQueryable,
 } from './store.js';
@@ -68,6 +70,33 @@ test('lists project documents in upload order', async () => {
 
   assert.equal(documents.length, 1);
   assert.match(queries[0] ?? '', /order by uploaded_at desc/);
+});
+
+test('lists project documents shared with a user', async () => {
+  const queries: Array<{
+    sql: string;
+    values: readonly unknown[] | undefined;
+  }> = [];
+  const db: DocumentQueryable = {
+    query: async <T>(sql: string, values?: readonly unknown[]) => {
+      queries.push({ sql, values });
+      return { rows: [documentRow()] as T[] };
+    },
+  };
+
+  const documents = await listProjectDocumentsSharedWithUser(db, {
+    workspaceId: ' workspace-1 ',
+    projectId: ' project-1 ',
+    userSub: ' auth|guest ',
+  });
+
+  assert.equal(documents.length, 1);
+  assert.match(queries[0]?.sql ?? '', /join project_document_shares/);
+  assert.deepEqual(queries[0]?.values, [
+    'workspace-1',
+    'project-1',
+    'auth|guest',
+  ]);
 });
 
 test('throws when document metadata cannot be found', async () => {
@@ -155,6 +184,40 @@ test('checks whether a document is shared with a user', async () => {
   assert.equal(isShared, true);
   assert.match(queries[0]?.sql ?? '', /from project_document_shares/);
   assert.deepEqual(queries[0]?.values, ['document-1', 'auth|guest']);
+});
+
+test('lists document shares in creation order', async () => {
+  const queries: Array<{
+    sql: string;
+    values: readonly unknown[] | undefined;
+  }> = [];
+  const db: DocumentQueryable = {
+    query: async <T>(sql: string, values?: readonly unknown[]) => {
+      queries.push({ sql, values });
+      return {
+        rows: [
+          {
+            document_id: 'document-1',
+            workspace_id: 'workspace-1',
+            project_id: 'project-1',
+            user_sub: 'auth|guest',
+            shared_by_sub: 'auth|owner',
+            created_at: now,
+            inserted: false,
+          },
+        ] as T[],
+      };
+    },
+  };
+
+  const shares = await listProjectDocumentShares(db, {
+    documentId: ' document-1 ',
+  });
+
+  assert.equal(shares.length, 1);
+  assert.equal(shares[0]?.userSub, 'auth|guest');
+  assert.match(queries[0]?.sql ?? '', /from project_document_shares/);
+  assert.deepEqual(queries[0]?.values, ['document-1']);
 });
 
 test('deletes document shares idempotently', async () => {
