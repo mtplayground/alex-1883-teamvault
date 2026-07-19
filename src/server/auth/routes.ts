@@ -83,6 +83,16 @@ export function createAuthRouter({
       );
   });
 
+  router.post('/logout', (_req, res) => {
+    res.clearCookie('mctai_session', {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      path: '/',
+    });
+    res.status(204).end();
+  });
+
   router.get('/session', async (req, res, next) => {
     try {
       if (!authConfig) {
