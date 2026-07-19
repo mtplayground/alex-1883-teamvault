@@ -2,11 +2,12 @@ import { Router, type Request } from 'express';
 
 import type { AuthConfig } from '../config.js';
 import { getPool } from '../db/pool.js';
+import { type UserAccountQueryable } from '../users/model.js';
 import {
-  upsertUserAccount,
-  type UserAccountQueryable,
-} from '../users/model.js';
-import { verifySessionCookie, type MctaiJwtVerifier } from './session.js';
+  authenticateSession,
+  type AuthenticationResult,
+} from './middleware.js';
+import { type MctaiJwtVerifier } from './session.js';
 import type { AuthSessionResponse } from '../../shared/auth.js';
 
 export interface AuthRouterOptions {
@@ -67,31 +68,29 @@ export function createAuthRouter({
         return;
       }
 
-      const userInput = await verifySessionCookie(
-        req.headers.cookie,
+      const result = await authenticateSession({
+        cookieHeader: req.headers.cookie,
         authConfig,
+        db,
         verifier,
-      );
+      });
 
-      if (!userInput) {
+      if (result.status === 'unauthenticated') {
         res.status(401).json({ user: null });
         return;
       }
 
-      const result = await upsertUserAccount(db, userInput);
-      const body: AuthSessionResponse = {
-        user: {
-          sub: result.user.sub,
-          email: result.user.email,
-          emailVerified: result.user.emailVerified,
-          name: result.user.name,
-          pictureUrl: result.user.pictureUrl,
-        },
-        isNew: result.isNew,
-        message: result.isNew
-          ? 'Registration complete.'
-          : `Welcome back, ${result.user.name ?? result.user.email}.`,
-      };
+      if (result.status === 'not_configured') {
+        res.status(503).json({ error: 'Authentication is not configured' });
+        return;
+      }
+
+      if (result.status === 'unverified') {
+        res.status(403).json({ error: 'Verified email required' });
+        return;
+      }
+
+      const body = sessionResponseFor(result);
 
       res.json(body);
     } catch (error) {
@@ -100,6 +99,24 @@ export function createAuthRouter({
   });
 
   return router;
+}
+
+function sessionResponseFor(
+  result: Extract<AuthenticationResult, { status: 'authenticated' }>,
+): AuthSessionResponse {
+  return {
+    user: {
+      sub: result.user.sub,
+      email: result.user.email,
+      emailVerified: result.user.emailVerified,
+      name: result.user.name,
+      pictureUrl: result.user.pictureUrl,
+    },
+    isNew: result.isNew,
+    message: result.isNew
+      ? 'Registration complete.'
+      : `Welcome back, ${result.user.name ?? result.user.email}.`,
+  };
 }
 
 export function buildAuthLoginUrl(
