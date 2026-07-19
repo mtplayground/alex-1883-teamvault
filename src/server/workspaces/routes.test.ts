@@ -27,6 +27,7 @@ test('workspace create endpoint returns the owner membership', async () => {
   const db = routeDb([
     userRow(),
     workspaceRow(),
+    activityRows('user_joined'),
     workspaceRow(),
     membershipRows('owner'),
   ]);
@@ -60,6 +61,7 @@ test('workspace create endpoint returns the owner membership', async () => {
       },
     ],
   });
+  assertActivity(db, 'user_joined');
 });
 
 test('workspace update endpoint rejects non-owners', async () => {
@@ -89,6 +91,7 @@ test('workspace invitation endpoint creates token and sends email', async () => 
     workspaceRow(),
     membershipRows('owner'),
     invitationRows('lee@example.test', 'member'),
+    activityRows('invitation_sent'),
   ]);
   const response = await withWorkspaceServer(
     db,
@@ -124,6 +127,7 @@ test('workspace invitation endpoint creates token and sends email', async () => 
   assert.equal(sentEmails[0]?.to, 'lee@example.test');
   assert.match(sentEmails[0]?.html ?? '', /route-token/);
   assert.match(sentEmails[0]?.text ?? '', /Accept invitation:/);
+  assertActivity(db, 'invitation_sent');
 });
 
 test('invitation accept endpoint adds verified user membership', async () => {
@@ -131,6 +135,7 @@ test('invitation accept endpoint adds verified user membership', async () => {
     userRow(),
     invitationRows('owner@example.test', 'guest'),
     acceptedInvitationRows('owner@example.test', 'guest'),
+    activityRows('invitation_accepted'),
   ]);
   const response = await withWorkspaceServer(db, (baseUrl) =>
     fetch(`${baseUrl}/api/workspaces/invitations/accept`, {
@@ -154,6 +159,7 @@ test('invitation accept endpoint adds verified user membership', async () => {
       updatedAt: now.toISOString(),
     },
   });
+  assertActivity(db, 'invitation_accepted');
 });
 
 async function withWorkspaceServer(
@@ -187,9 +193,15 @@ async function withWorkspaceServer(
 
 const now = new Date('2026-07-19T00:00:00.000Z');
 
-function routeDb(results: Array<{ rows: unknown[] }>): WorkspaceQueryable {
+function routeDb(results: Array<{ rows: unknown[] }>): WorkspaceQueryable & {
+  queries: Array<{ sql: string; values: readonly unknown[] }>;
+} {
+  const queries: Array<{ sql: string; values: readonly unknown[] }> = [];
+
   return {
-    query: async <T>() => {
+    queries,
+    query: async <T>(sql: string, values: readonly unknown[] = []) => {
+      queries.push({ sql, values });
       const result = results.shift();
       if (!result) {
         throw new Error('Unexpected query');
@@ -198,6 +210,18 @@ function routeDb(results: Array<{ rows: unknown[] }>): WorkspaceQueryable {
       return { rows: result.rows as T[] };
     },
   };
+}
+
+function assertActivity(
+  db: { queries: Array<{ sql: string; values: readonly unknown[] }> },
+  action: string,
+): void {
+  const activityQuery = db.queries.find((query) =>
+    /insert into activity_entries/.test(query.sql),
+  );
+
+  assert.ok(activityQuery, 'expected activity entry to be recorded');
+  assert.equal(activityQuery.values[1], action);
 }
 
 function userRow() {
@@ -267,6 +291,23 @@ function invitationRows(
         expires_at: new Date('2026-07-26T00:00:00.000Z'),
         accepted_at: acceptedAt,
         revoked_at: null,
+      },
+    ],
+  };
+}
+
+function activityRows(action: string) {
+  return {
+    rows: [
+      {
+        id: 'activity-1',
+        actor_sub: 'auth|123',
+        action,
+        workspace_id: 'workspace-1',
+        project_id: null,
+        document_id: null,
+        metadata: {},
+        created_at: now,
       },
     ],
   };

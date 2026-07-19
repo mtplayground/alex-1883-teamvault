@@ -7,6 +7,7 @@ import {
 } from 'express';
 
 import type { AuthConfig, EmailConfig, StorageConfig } from '../config.js';
+import { recordActivity } from '../activity/store.js';
 import { requireAuth, type AuthenticatedLocals } from '../auth/middleware.js';
 import { getPool } from '../db/pool.js';
 import type { MctaiJwtVerifier } from '../auth/session.js';
@@ -126,6 +127,15 @@ export function createProjectRouter({
         name: readBodyString(req, 'name'),
         description: readOptionalBodyString(req, 'description'),
       });
+      await recordActivity(db, {
+        actorSub: currentUser.currentUser.sub,
+        action: 'project_created',
+        workspaceId,
+        projectId: project.id,
+        metadata: {
+          name: project.name,
+        },
+      });
 
       res.status(201).json({ project: projectResponse(project) });
     } catch (error) {
@@ -197,6 +207,18 @@ export function createProjectRouter({
           fileName,
           contentType,
           body,
+        });
+        await recordActivity(db, {
+          actorSub: currentUser.currentUser.sub,
+          action: 'document_uploaded',
+          workspaceId,
+          projectId,
+          documentId: document.id,
+          metadata: {
+            fileName: document.fileName,
+            contentType: document.contentType,
+            sizeBytes: document.sizeBytes,
+          },
         });
 
         res.status(201).json({ document: documentResponse(document) });
@@ -327,6 +349,19 @@ export function createProjectRouter({
           userSub: recipient.userSub,
           sharedBySub: currentUser.currentUser.sub,
         });
+        if (shareResult.isNew) {
+          await recordActivity(db, {
+            actorSub: currentUser.currentUser.sub,
+            action: 'document_shared',
+            workspaceId,
+            projectId,
+            documentId: document.id,
+            metadata: {
+              sharedWithSub: recipient.userSub,
+              sharedWithEmail: recipient.email,
+            },
+          });
+        }
         const email = shareResult.isNew
           ? await sendDocumentSharedEmail({
               req,

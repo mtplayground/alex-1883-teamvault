@@ -36,6 +36,56 @@ test('authenticates a valid mctai session and identifies the current user', asyn
   assert.equal(authenticatedUser(result)?.emailVerified, true);
 });
 
+test('records activity when a verified user signs up for the first time', async () => {
+  const activityActions: unknown[] = [];
+  const db = {
+    query: async <T>(sql: string, values: readonly unknown[] = []) => {
+      if (/insert into users/.test(sql)) {
+        return userDb({ emailVerified: true, inserted: true }).query<T>(
+          sql,
+          values,
+        );
+      }
+
+      if (/insert into activity_entries/.test(sql)) {
+        activityActions.push(values[1]);
+        return {
+          rows: [
+            {
+              id: 'activity-1',
+              actor_sub: values[0],
+              action: values[1],
+              workspace_id: null,
+              project_id: null,
+              document_id: null,
+              metadata: values[5],
+              created_at: new Date('2026-07-19T00:00:00.000Z'),
+            },
+          ] as T[],
+        };
+      }
+
+      throw new Error(`Unexpected query: ${sql}`);
+    },
+  };
+  const verifier: MctaiJwtVerifier = async () => ({
+    sub: 'auth|123',
+    email: 'ada@example.test',
+    email_verified: true,
+    name: 'Ada',
+  });
+
+  const result = await authenticateSession({
+    cookieHeader: 'mctai_session=valid',
+    authConfig,
+    db,
+    verifier,
+  });
+
+  assert.equal(result.status, 'authenticated');
+  assert.deepEqual(activityActions, ['user_joined']);
+});
+
 test('rejects missing or invalid mctai sessions', async () => {
   const verifier: MctaiJwtVerifier = async () => {
     throw new Error('bad session');

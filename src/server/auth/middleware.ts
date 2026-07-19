@@ -1,6 +1,7 @@
 import type { RequestHandler } from 'express';
 
 import type { AuthConfig } from '../config.js';
+import { recordActivity, type ActivityQueryable } from '../activity/store.js';
 import { getPool } from '../db/pool.js';
 import {
   upsertUserAccount,
@@ -11,7 +12,7 @@ import { verifySessionCookie, type MctaiJwtVerifier } from './session.js';
 
 export interface AuthMiddlewareOptions {
   authConfig: AuthConfig | null;
-  db?: UserAccountQueryable;
+  db?: UserAccountQueryable & ActivityQueryable;
   verifier?: MctaiJwtVerifier;
   requireEmailVerified?: boolean;
 }
@@ -70,6 +71,17 @@ export async function authenticateSession({
       user: result.user,
       isNew: result.isNew,
     };
+  }
+
+  if (result.isNew) {
+    await recordActivity(db, {
+      actorSub: result.user.sub,
+      action: 'user_joined',
+      metadata: {
+        email: result.user.email,
+        name: result.user.name,
+      },
+    });
   }
 
   return {
