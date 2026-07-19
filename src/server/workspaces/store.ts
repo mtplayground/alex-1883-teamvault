@@ -1,8 +1,13 @@
+import { createHash, randomBytes } from 'node:crypto';
+
 import {
   normalizeWorkspaceName,
+  parseWorkspaceInviteRole,
   parseWorkspaceRole,
   type NewWorkspaceInput,
   type Workspace,
+  type WorkspaceInvitation,
+  type WorkspaceInviteRole,
   type WorkspaceMembership,
   type WorkspaceRole,
 } from './model.js';
@@ -32,10 +37,39 @@ interface WorkspaceMembershipRow {
   updated_at: Date;
 }
 
+interface WorkspaceInvitationRow {
+  id: string;
+  workspace_id: string;
+  email: string;
+  role: string;
+  token_hash: string;
+  invited_by_sub: string;
+  created_at: Date;
+  updated_at: Date;
+  expires_at: Date;
+  accepted_at: Date | null;
+  revoked_at: Date | null;
+}
+
 export interface WorkspaceDetails {
   workspace: Workspace;
   members: WorkspaceMembership[];
 }
+
+export interface IssueWorkspaceInvitationInput {
+  workspaceId: string;
+  email: string;
+  role: WorkspaceInviteRole;
+  invitedBySub: string;
+  tokenGenerator?: InvitationTokenGenerator;
+}
+
+export interface IssueWorkspaceInvitationResult {
+  invitation: WorkspaceInvitation;
+  token: string;
+}
+
+export type InvitationTokenGenerator = () => string;
 
 export class WorkspaceNotFoundError extends Error {
   constructor() {
@@ -187,6 +221,134 @@ export async function requireWorkspaceMembership(
   return role;
 }
 
+export async function issueWorkspaceInvitation(
+  db: WorkspaceQueryable,
+  input: IssueWorkspaceInvitationInput,
+): Promise<IssueWorkspaceInvitationResult> {
+  const email = normalizeEmail(input.email);
+  const role = parseWorkspaceInviteRole(input.role);
+  const invitedBySub = normalizeRequiredText(
+    input.invitedBySub,
+    'invitedBySub',
+  );
+  const token = (input.tokenGenerator ?? createInvitationToken)();
+  const tokenHash = hashInvitationToken(token);
+  const result = await db.query<WorkspaceInvitationRow>(
+    `
+      insert into workspace_invitations (
+        workspace_id,
+        email,
+        role,
+        token_hash,
+        invited_by_sub
+      )
+      values ($1, $2, $3, $4, $5)
+      returning
+        id,
+        workspace_id,
+        email,
+        role,
+        token_hash,
+        invited_by_sub,
+        created_at,
+        updated_at,
+        expires_at,
+        accepted_at,
+        revoked_at
+    `,
+    [input.workspaceId, email, role, tokenHash, invitedBySub],
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    throw new Error('Workspace invitation creation returned no rows');
+  }
+
+  return {
+    invitation: mapWorkspaceInvitationRow(row),
+    token,
+  };
+}
+
+export async function listPendingWorkspaceInvitations(
+  db: WorkspaceQueryable,
+  workspaceId: string,
+): Promise<WorkspaceInvitation[]> {
+  const result = await db.query<WorkspaceInvitationRow>(
+    `
+      select
+        id,
+        workspace_id,
+        email,
+        role,
+        token_hash,
+        invited_by_sub,
+        created_at,
+        updated_at,
+        expires_at,
+        accepted_at,
+        revoked_at
+      from workspace_invitations
+      where workspace_id = $1
+        and accepted_at is null
+        and revoked_at is null
+        and expires_at > now()
+      order by created_at desc, email asc
+    `,
+    [workspaceId],
+  );
+
+  return result.rows.map(mapWorkspaceInvitationRow);
+}
+
+export async function revokeWorkspaceInvitation(
+  db: WorkspaceQueryable,
+  workspaceId: string,
+  invitationId: string,
+): Promise<WorkspaceInvitation> {
+  const result = await db.query<WorkspaceInvitationRow>(
+    `
+      update workspace_invitations
+      set revoked_at = now(),
+          updated_at = now()
+      where id = $1
+        and workspace_id = $2
+        and accepted_at is null
+        and revoked_at is null
+      returning
+        id,
+        workspace_id,
+        email,
+        role,
+        token_hash,
+        invited_by_sub,
+        created_at,
+        updated_at,
+        expires_at,
+        accepted_at,
+        revoked_at
+    `,
+    [invitationId, workspaceId],
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    throw new WorkspaceNotFoundError();
+  }
+
+  return mapWorkspaceInvitationRow(row);
+}
+
+export function createInvitationToken(): string {
+  return randomBytes(32).toString('base64url');
+}
+
+export function hashInvitationToken(token: string): string {
+  return createHash('sha256')
+    .update(normalizeRequiredText(token, 'token'), 'utf8')
+    .digest('hex');
+}
+
 async function findWorkspace(
   db: WorkspaceQueryable,
   workspaceId: string,
@@ -224,6 +386,34 @@ function mapWorkspaceMembershipRow(
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function mapWorkspaceInvitationRow(
+  row: WorkspaceInvitationRow,
+): WorkspaceInvitation {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    email: row.email,
+    role: parseWorkspaceInviteRole(row.role),
+    tokenHash: row.token_hash,
+    invitedBySub: row.invited_by_sub,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    expiresAt: row.expires_at,
+    acceptedAt: row.accepted_at,
+    revokedAt: row.revoked_at,
+  };
+}
+
+function normalizeEmail(email: string): string {
+  const normalized = normalizeRequiredText(email, 'email').toLowerCase();
+
+  if (!normalized.includes('@')) {
+    throw new Error('email must be a valid email address');
+  }
+
+  return normalized;
 }
 
 function normalizeRequiredText(value: string, field: string): string {

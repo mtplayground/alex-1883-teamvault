@@ -5,6 +5,7 @@ import test from 'node:test';
 import express from 'express';
 
 import type { AuthConfig } from '../config.js';
+import type { SendEmailInput } from '../email/client.js';
 import type { MctaiJwtVerifier } from '../auth/session.js';
 import { createWorkspaceRouter } from './routes.js';
 import type { WorkspaceQueryable } from './store.js';
@@ -80,15 +81,67 @@ test('workspace update endpoint rejects non-owners', async () => {
   });
 });
 
+test('workspace invitation endpoint creates token and sends email', async () => {
+  const sentEmails: SendEmailInput[] = [];
+  const db = routeDb([
+    userRow(),
+    membershipRows('owner'),
+    workspaceRow(),
+    membershipRows('owner'),
+    invitationRows('lee@example.test', 'member'),
+  ]);
+  const response = await withWorkspaceServer(
+    db,
+    (baseUrl) =>
+      fetch(`${baseUrl}/api/workspaces/workspace-1/invitations`, {
+        method: 'POST',
+        headers: {
+          cookie: 'mctai_session=valid',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ email: 'Lee@Example.Test', role: 'member' }),
+      }),
+    {
+      emailSender: {
+        send: async (input) => {
+          sentEmails.push(input);
+          return { status: 'sent', id: 'message-1' };
+        },
+      },
+      invitationTokenGenerator: () => 'route-token',
+    },
+  );
+
+  assert.equal(response.status, 201);
+  assert.deepEqual(await response.json(), {
+    invitation: invitationResponse('lee@example.test', 'member'),
+    email: {
+      status: 'sent',
+      id: 'message-1',
+    },
+  });
+  assert.equal(sentEmails.length, 1);
+  assert.equal(sentEmails[0]?.to, 'lee@example.test');
+  assert.match(sentEmails[0]?.html ?? '', /route-token/);
+  assert.match(sentEmails[0]?.text ?? '', /Accept invitation:/);
+});
+
 async function withWorkspaceServer(
   db: WorkspaceQueryable,
   request: (baseUrl: string) => Promise<Response>,
+  options: Partial<Parameters<typeof createWorkspaceRouter>[0]> = {},
 ): Promise<Response> {
   const app = express();
   app.use(express.json());
   app.use(
     '/api/workspaces',
-    createWorkspaceRouter({ authConfig, db, verifier }),
+    createWorkspaceRouter({
+      authConfig,
+      db,
+      selfUrl: 'https://app.example.test',
+      verifier,
+      ...options,
+    }),
   );
 
   const server = app.listen(0);
@@ -161,5 +214,41 @@ function membershipRows(role: 'owner' | 'member' | 'guest') {
         updated_at: now,
       },
     ],
+  };
+}
+
+function invitationRows(email: string, role: 'member' | 'guest') {
+  return {
+    rows: [
+      {
+        id: 'invite-1',
+        workspace_id: 'workspace-1',
+        email,
+        role,
+        token_hash:
+          '55f60340364f6886ff184d6a149f549ad80cdf91d2e5b35f932e0776741559b3',
+        invited_by_sub: 'auth|123',
+        created_at: now,
+        updated_at: now,
+        expires_at: new Date('2026-07-26T00:00:00.000Z'),
+        accepted_at: null,
+        revoked_at: null,
+      },
+    ],
+  };
+}
+
+function invitationResponse(email: string, role: 'member' | 'guest') {
+  return {
+    id: 'invite-1',
+    workspaceId: 'workspace-1',
+    email,
+    role,
+    invitedBySub: 'auth|123',
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+    expiresAt: '2026-07-26T00:00:00.000Z',
+    acceptedAt: null,
+    revokedAt: null,
   };
 }

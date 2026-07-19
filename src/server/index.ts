@@ -6,7 +6,12 @@ import express, {
   type RequestHandler,
 } from 'express';
 
-import { readAuthConfig, readRuntimeConfig, readSelfUrl } from './config.js';
+import {
+  readAuthConfig,
+  readEmailConfig,
+  readRuntimeConfig,
+  readSelfUrl,
+} from './config.js';
 import { createAuthRouter } from './auth/routes.js';
 import { closePool, smokeTestDatabase } from './db/pool.js';
 import { createWorkspaceRouter } from './workspaces/routes.js';
@@ -34,6 +39,8 @@ app.use(
   '/api/workspaces',
   createWorkspaceRouter({
     authConfig: readAuthConfig(process.env),
+    emailConfig: readEmailConfig(process.env),
+    selfUrl: process.env.SELF_URL ? readSelfUrl(process.env) : null,
   }),
 );
 
