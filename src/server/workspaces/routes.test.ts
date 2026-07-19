@@ -162,6 +162,63 @@ test('invitation accept endpoint adds verified user membership', async () => {
   assertActivity(db, 'invitation_accepted');
 });
 
+test('workspace activity endpoint lists events with paging and project filtering', async () => {
+  const db = routeDb([
+    userRow(),
+    membershipRows('member'),
+    activityListRows({ count: 2 }),
+  ]);
+  const response = await withWorkspaceServer(db, (baseUrl) =>
+    fetch(
+      `${baseUrl}/api/workspaces/workspace-1/activity?limit=2&offset=4&projectId=project-1`,
+      {
+        headers: {
+          cookie: 'mctai_session=valid',
+        },
+      },
+    ),
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    activities: [
+      activityResponse('activity-1', 'document_shared'),
+      activityResponse('activity-2', 'project_created'),
+    ],
+    paging: {
+      limit: 2,
+      offset: 4,
+      nextOffset: 6,
+    },
+  });
+
+  const activityQuery = db.queries.find((query) =>
+    /from activity_entries/.test(query.sql),
+  );
+  assert.ok(activityQuery, 'expected activity list query');
+  assert.deepEqual(activityQuery.values, ['workspace-1', 2, 4, 'project-1']);
+});
+
+test('workspace activity endpoint is restricted to workspace members', async () => {
+  const db = routeDb([userRow(), emptyRows()]);
+  const response = await withWorkspaceServer(db, (baseUrl) =>
+    fetch(`${baseUrl}/api/workspaces/workspace-1/activity`, {
+      headers: {
+        cookie: 'mctai_session=valid',
+      },
+    }),
+  );
+
+  assert.equal(response.status, 403);
+  assert.deepEqual(await response.json(), {
+    error: 'Workspace membership required',
+  });
+  assert.equal(
+    db.queries.some((query) => /from activity_entries/.test(query.sql)),
+    false,
+  );
+});
+
 async function withWorkspaceServer(
   db: WorkspaceQueryable,
   request: (baseUrl: string) => Promise<Response>,
@@ -296,6 +353,33 @@ function invitationRows(
   };
 }
 
+function activityListRows({ count }: { count: number }) {
+  return {
+    rows: [
+      {
+        id: 'activity-1',
+        actor_sub: 'auth|123',
+        action: 'document_shared',
+        workspace_id: 'workspace-1',
+        project_id: 'project-1',
+        document_id: 'document-1',
+        metadata: { sharedWithSub: 'auth|guest' },
+        created_at: now,
+      },
+      {
+        id: 'activity-2',
+        actor_sub: 'auth|123',
+        action: 'project_created',
+        workspace_id: 'workspace-1',
+        project_id: 'project-1',
+        document_id: null,
+        metadata: { name: 'Launch plan' },
+        created_at: new Date('2026-07-18T00:00:00.000Z'),
+      },
+    ].slice(0, count),
+  };
+}
+
 function activityRows(action: string) {
   return {
     rows: [
@@ -310,6 +394,29 @@ function activityRows(action: string) {
         created_at: now,
       },
     ],
+  };
+}
+
+function emptyRows() {
+  return { rows: [] };
+}
+
+function activityResponse(id: string, action: string) {
+  return {
+    id,
+    actorSub: 'auth|123',
+    action,
+    workspaceId: 'workspace-1',
+    projectId: 'project-1',
+    documentId: action === 'document_shared' ? 'document-1' : null,
+    metadata:
+      action === 'document_shared'
+        ? { sharedWithSub: 'auth|guest' }
+        : { name: 'Launch plan' },
+    createdAt:
+      id === 'activity-1'
+        ? now.toISOString()
+        : new Date('2026-07-18T00:00:00.000Z').toISOString(),
   };
 }
 
