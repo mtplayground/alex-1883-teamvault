@@ -14,6 +14,13 @@ import './styles.css';
 
 type VerificationStatus = 'success' | 'expired' | 'unknown';
 type WorkspaceRole = 'owner' | 'member' | 'guest';
+type ActivityAction =
+  | 'user_joined'
+  | 'invitation_sent'
+  | 'invitation_accepted'
+  | 'project_created'
+  | 'document_uploaded'
+  | 'document_shared';
 
 interface WorkspaceDetailsResponse {
   workspace: {
@@ -110,6 +117,26 @@ interface ProjectDocumentShareMutationResponse {
   email: unknown;
 }
 
+interface ActivityEntryResponse {
+  id: string;
+  actorSub: string;
+  action: ActivityAction;
+  workspaceId: string | null;
+  projectId: string | null;
+  documentId: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
+interface ActivityHistoryResponse {
+  activities: ActivityEntryResponse[];
+  paging: {
+    limit: number;
+    offset: number;
+    nextOffset: number | null;
+  };
+}
+
 interface ProjectFormValues {
   name: string;
   description: string;
@@ -163,6 +190,14 @@ function App() {
     return (
       <ProtectedRoute>
         <ProjectsListScreen />
+      </ProtectedRoute>
+    );
+  }
+
+  if (path === '/activity') {
+    return (
+      <ProtectedRoute>
+        <ActivityHistoryScreen />
       </ProtectedRoute>
     );
   }
@@ -625,6 +660,9 @@ function DashboardScreen() {
             <div className="button-row compact-row">
               <a className="button secondary-button" href="/projects">
                 View projects
+              </a>
+              <a className="button secondary-button" href="/activity">
+                Activity
               </a>
             </div>
           </section>
@@ -1247,6 +1285,236 @@ function ProjectsListScreen() {
             ))}
           </div>
         )}
+      </section>
+    </main>
+  );
+}
+
+function ActivityHistoryScreen() {
+  const { state } = useAuth();
+  const session = signedInSession(state);
+  const [workspace, setWorkspace] = useState<WorkspaceDetailsResponse | null>(
+    null,
+  );
+  const [projects, setProjects] = useState<ProjectResponse[]>([]);
+  const [activities, setActivities] = useState<ActivityEntryResponse[]>([]);
+  const [projectFilter, setProjectFilter] = useState('');
+  const [paging, setPaging] = useState({
+    limit: 10,
+    offset: 0,
+    nextOffset: null as number | null,
+  });
+  const [status, setStatus] = useState<
+    | { type: 'idle'; message: string | null }
+    | { type: 'loading'; message: string }
+    | { type: 'error'; message: string }
+  >({ type: 'idle', message: null });
+
+  useEffect(() => {
+    const workspaceId = window.localStorage.getItem(activeWorkspaceStorageKey);
+
+    if (!workspaceId || workspace || status.type !== 'idle') {
+      return;
+    }
+
+    void loadActivityPage({ workspaceId, offset: 0, projectId: projectFilter });
+  }, [workspace, status.type]);
+
+  async function loadActivityPage(input: {
+    workspaceId?: string;
+    offset: number;
+    projectId: string;
+  }) {
+    const workspaceId =
+      input.workspaceId ??
+      window.localStorage.getItem(activeWorkspaceStorageKey);
+
+    if (!workspaceId) {
+      return;
+    }
+
+    setStatus({ type: 'loading', message: 'Loading activity.' });
+
+    try {
+      const [workspaceDetails, projectList, activityHistory] =
+        await Promise.all([
+          workspace
+            ? Promise.resolve(workspace)
+            : fetchWorkspaceDetails(workspaceId),
+          projects.length > 0
+            ? Promise.resolve(projects)
+            : fetchProjects(workspaceId),
+          fetchWorkspaceActivity(workspaceId, {
+            limit: paging.limit,
+            offset: input.offset,
+            projectId: input.projectId || null,
+          }),
+        ]);
+
+      setWorkspace(workspaceDetails);
+      setProjects(projectList);
+      setActivities(activityHistory.activities);
+      setPaging(activityHistory.paging);
+      setStatus({ type: 'idle', message: null });
+    } catch (error) {
+      setStatus({
+        type: 'error',
+        message:
+          error instanceof Error ? error.message : 'Unable to load activity.',
+      });
+    }
+  }
+
+  if (!session) {
+    return null;
+  }
+
+  if (!window.localStorage.getItem(activeWorkspaceStorageKey)) {
+    return (
+      <main className="app-shell centered-shell">
+        <StatusPanel title="Workspace required" tone="neutral">
+          <p>Open a workspace before viewing activity.</p>
+          <a className="button primary-button" href="/dashboard">
+            Open dashboard
+          </a>
+        </StatusPanel>
+      </main>
+    );
+  }
+
+  const projectNames = new Map(
+    projects.map((project) => [project.id, project.name] as const),
+  );
+  const previousOffset =
+    paging.offset > 0 ? Math.max(0, paging.offset - paging.limit) : null;
+  const pageRange =
+    activities.length > 0
+      ? `${paging.offset + 1}-${paging.offset + activities.length}`
+      : '0';
+
+  return (
+    <main className="app-shell signed-in-shell">
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">Activity</p>
+          <h1>{workspace?.workspace.name ?? 'Workspace activity'}</h1>
+        </div>
+        <div className="topbar-actions">
+          <UserBadge user={session.user} />
+          <a className="button secondary-button" href="/dashboard">
+            Dashboard
+          </a>
+          <a className="button secondary-button" href="/projects">
+            Projects
+          </a>
+        </div>
+      </header>
+
+      {status.type !== 'idle' || status.message ? (
+        <p
+          className={
+            status.type === 'error' ? 'inline-alert dashboard-alert' : 'notice'
+          }
+        >
+          {status.message}
+        </p>
+      ) : null}
+
+      <section className="workspace-panel" aria-labelledby="activity-filter">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Timeline</p>
+            <h2 id="activity-filter">Workspace activity</h2>
+          </div>
+          <span className="role-pill">{activities.length}</span>
+        </div>
+
+        <form
+          className="activity-filter-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void loadActivityPage({ offset: 0, projectId: projectFilter });
+          }}
+        >
+          <label htmlFor="activity-project">Project</label>
+          <select
+            id="activity-project"
+            value={projectFilter}
+            onChange={(event) => {
+              const nextProjectId = event.target.value;
+              setProjectFilter(nextProjectId);
+              void loadActivityPage({ offset: 0, projectId: nextProjectId });
+            }}
+            disabled={status.type === 'loading'}
+          >
+            <option value="">All projects</option>
+            {projects.map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.name}
+              </option>
+            ))}
+          </select>
+        </form>
+
+        {activities.length === 0 ? (
+          <p>No activity is visible for this selection.</p>
+        ) : (
+          <ol className="activity-timeline">
+            {activities.map((activity) => {
+              const copy = activityTimelineCopy(activity, projectNames);
+
+              return (
+                <li className="activity-item" key={activity.id}>
+                  <div className="activity-dot" aria-hidden="true" />
+                  <div>
+                    <div className="activity-item-heading">
+                      <strong>{copy.title}</strong>
+                      <time dateTime={activity.createdAt}>
+                        {formatDateTime(activity.createdAt)}
+                      </time>
+                    </div>
+                    <p>{copy.detail}</p>
+                    <span>{activity.actorSub}</span>
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        )}
+
+        <div className="activity-pager" aria-label="Activity pages">
+          <button
+            className="button secondary-button"
+            type="button"
+            disabled={previousOffset === null || status.type === 'loading'}
+            onClick={() => {
+              if (previousOffset !== null) {
+                void loadActivityPage({
+                  offset: previousOffset,
+                  projectId: projectFilter,
+                });
+              }
+            }}
+          >
+            Previous
+          </button>
+          <span>{pageRange}</span>
+          <button
+            className="button primary-button"
+            type="button"
+            disabled={paging.nextOffset === null || status.type === 'loading'}
+            onClick={() => {
+              if (paging.nextOffset !== null) {
+                void loadActivityPage({
+                  offset: paging.nextOffset,
+                  projectId: projectFilter,
+                });
+              }
+            }}
+          >
+            Next
+          </button>
+        </div>
       </section>
     </main>
   );
@@ -2284,6 +2552,28 @@ async function fetchProjects(workspaceId: string): Promise<ProjectResponse[]> {
   return body.projects;
 }
 
+async function fetchWorkspaceActivity(
+  workspaceId: string,
+  input: { limit: number; offset: number; projectId: string | null },
+): Promise<ActivityHistoryResponse> {
+  const params = new URLSearchParams({
+    limit: String(input.limit),
+    offset: String(input.offset),
+  });
+
+  if (input.projectId) {
+    params.set('projectId', input.projectId);
+  }
+
+  const response = await apiFetch(
+    `/api/workspaces/${encodeURIComponent(
+      workspaceId,
+    )}/activity?${params.toString()}`,
+  );
+
+  return readApiResponse<ActivityHistoryResponse>(response);
+}
+
 async function fetchProjectDetails(
   workspaceId: string,
   projectId: string,
@@ -2640,6 +2930,16 @@ function formatDate(value: string): string {
   }).format(new Date(value));
 }
 
+function formatDateTime(value: string): string {
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(value));
+}
+
 function formatBytes(value: number): string {
   if (value < 1024) {
     return `${value} B`;
@@ -2726,6 +3026,81 @@ function workspaceMemberLabel(
   );
 
   return member ? `${member.userSub} (${member.role})` : userSub;
+}
+
+function activityTimelineCopy(
+  activity: ActivityEntryResponse,
+  projectNames: Map<string, string>,
+): { title: string; detail: string } {
+  const projectName = activity.projectId
+    ? (projectNames.get(activity.projectId) ?? 'Project')
+    : 'Workspace';
+
+  switch (activity.action) {
+    case 'user_joined':
+      return {
+        title: 'Joined workspace',
+        detail: activityMetadataText(activity.metadata, 'role')
+          ? `${activity.actorSub} joined as ${activityMetadataText(
+              activity.metadata,
+              'role',
+            )}.`
+          : `${activity.actorSub} joined the workspace.`,
+      };
+    case 'invitation_sent':
+      return {
+        title: 'Invitation sent',
+        detail: `Sent to ${activityMetadataText(
+          activity.metadata,
+          'email',
+          'a workspace user',
+        )} for ${projectName}.`,
+      };
+    case 'invitation_accepted':
+      return {
+        title: 'Invitation accepted',
+        detail: `${activity.actorSub} accepted access to ${projectName}.`,
+      };
+    case 'project_created':
+      return {
+        title: 'Project created',
+        detail: `${activityMetadataText(
+          activity.metadata,
+          'name',
+          projectName,
+        )} was added to the workspace.`,
+      };
+    case 'document_uploaded':
+      return {
+        title: 'Document uploaded',
+        detail: `${activityMetadataText(
+          activity.metadata,
+          'fileName',
+          'A document',
+        )} was uploaded to ${projectName}.`,
+      };
+    case 'document_shared':
+      return {
+        title: 'Document shared',
+        detail: `${projectName} document shared with ${activityMetadataText(
+          activity.metadata,
+          'sharedWithEmail',
+          activityMetadataText(activity.metadata, 'sharedWithSub', 'a user'),
+        )}.`,
+      };
+  }
+}
+
+function activityMetadataText(
+  metadata: Record<string, unknown>,
+  key: string,
+  fallback = '',
+): string {
+  const value = metadata[key];
+
+  return typeof value === 'string' && value.trim().length > 0
+    ? value
+    : fallback;
 }
 
 function friendlyInvitationError(message: string): string {
