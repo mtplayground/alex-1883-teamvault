@@ -26,11 +26,14 @@ import {
   deleteProjectDocumentShare,
   getProjectDocument,
   isProjectDocumentSharedWithUser,
+  listProjectDocumentShares,
   listProjectDocuments,
+  listProjectDocumentsSharedWithUser,
   ProjectDocumentNotFoundError,
 } from '../documents/store.js';
 import {
   roleCanAccessDocument,
+  roleCanAccessProjectDocuments,
   roleCanShareDocument,
 } from '../documents/permissions.js';
 import {
@@ -223,12 +226,58 @@ export function createProjectRouter({
           role,
         });
 
-        const documents = await listProjectDocuments(db, {
-          workspaceId,
-          projectId,
-        });
+        const documents = roleCanAccessProjectDocuments(role)
+          ? await listProjectDocuments(db, {
+              workspaceId,
+              projectId,
+            })
+          : await listProjectDocumentsSharedWithUser(db, {
+              workspaceId,
+              projectId,
+              userSub: currentUser.currentUser.sub,
+            });
 
         res.json({ documents: documents.map(documentResponse) });
+      } catch (error) {
+        handleProjectError(error, res, next);
+      }
+    },
+  );
+
+  router.get(
+    '/:workspaceId/projects/:projectId/documents/:documentId/shares',
+    async (req, res, next) => {
+      try {
+        const workspaceId = req.params.workspaceId;
+        const projectId = req.params.projectId;
+        const documentId = req.params.documentId;
+        const currentUser = currentUserLocals(res);
+        const role = await requireWorkspaceMembership(
+          db,
+          workspaceId,
+          currentUser.currentUser.sub,
+        );
+        await getProjectDocument(db, {
+          workspaceId,
+          projectId,
+          documentId,
+        });
+        const hasProjectAccess = await canAccessProject(db, {
+          workspaceId,
+          projectId,
+          userSub: currentUser.currentUser.sub,
+          role,
+        });
+
+        if (!roleCanShareDocument(role, { hasProjectAccess })) {
+          throw new ProjectPermissionError(
+            'Only project owners and members can share documents',
+          );
+        }
+
+        const shares = await listProjectDocumentShares(db, { documentId });
+
+        res.json({ shares: shares.map(documentShareResponse) });
       } catch (error) {
         handleProjectError(error, res, next);
       }

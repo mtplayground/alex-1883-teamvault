@@ -245,6 +245,31 @@ test('member can list project documents', async () => {
   });
 });
 
+test('guest lists only explicitly shared project documents', async () => {
+  const db = routeDb([
+    userRow(),
+    roleRow('guest'),
+    projectRows(),
+    shareRows(),
+    documentRows(),
+  ]);
+  const response = await withProjectServer(db, (baseUrl) =>
+    fetch(
+      `${baseUrl}/api/workspaces/workspace-1/projects/project-1/documents`,
+      {
+        headers: {
+          cookie: 'mctai_session=valid',
+        },
+      },
+    ),
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    documents: [documentResponse()],
+  });
+});
+
 test('guest can download documents from a shared project', async () => {
   const db = routeDb([
     userRow(),
@@ -309,6 +334,31 @@ test('guest cannot list documents from an unshared project', async () => {
   assert.equal(response.status, 403);
   assert.deepEqual(await response.json(), {
     error: 'Guests can only view projects shared with them',
+  });
+});
+
+test('member can list document shares', async () => {
+  const db = routeDb([
+    userRow(),
+    roleRow('member'),
+    documentRows(),
+    projectRows(),
+    documentShareRows(),
+  ]);
+  const response = await withProjectServer(db, (baseUrl) =>
+    fetch(
+      `${baseUrl}/api/workspaces/workspace-1/projects/project-1/documents/document-1/shares`,
+      {
+        headers: {
+          cookie: 'mctai_session=valid',
+        },
+      },
+    ),
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    shares: [documentShareResponse()],
   });
 });
 

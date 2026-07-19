@@ -92,6 +92,24 @@ interface ProjectDocumentListResponse {
   documents: ProjectDocumentResponse[];
 }
 
+interface ProjectDocumentShareResponse {
+  documentId: string;
+  workspaceId: string;
+  projectId: string;
+  userSub: string;
+  sharedBySub: string;
+  createdAt: string;
+}
+
+interface ProjectDocumentShareListResponse {
+  shares: ProjectDocumentShareResponse[];
+}
+
+interface ProjectDocumentShareMutationResponse {
+  share: ProjectDocumentShareResponse;
+  email: unknown;
+}
+
 interface ProjectFormValues {
   name: string;
   description: string;
@@ -1242,6 +1260,11 @@ function ProjectDetailScreen({ projectId }: { projectId: string }) {
   );
   const [project, setProject] = useState<ProjectResponse | null>(null);
   const [documents, setDocuments] = useState<ProjectDocumentResponse[]>([]);
+  const [documentSharesById, setDocumentSharesById] = useState<
+    Record<string, ProjectDocumentShareResponse[]>
+  >({});
+  const [shareRecipientsByDocumentId, setShareRecipientsByDocumentId] =
+    useState<Record<string, string>>({});
   const [projectName, setProjectName] = useState('');
   const [projectDescription, setProjectDescription] = useState('');
   const [formErrors, setFormErrors] = useState<ProjectFormErrors>({});
@@ -1259,6 +1282,12 @@ function ProjectDetailScreen({ projectId }: { projectId: string }) {
     | { type: 'success'; message: string }
     | { type: 'error'; message: string }
   >({ type: 'idle', message: null });
+  const [shareStatus, setShareStatus] = useState<
+    | { type: 'idle'; documentId: string | null; message: string | null }
+    | { type: 'loading'; documentId: string; message: string }
+    | { type: 'success'; documentId: string; message: string }
+    | { type: 'error'; documentId: string | null; message: string }
+  >({ type: 'idle', documentId: null, message: null });
   const currentRole = workspace?.members.find(
     (member) => member.userSub === session?.user.sub,
   )?.role;
@@ -1267,7 +1296,7 @@ function ProjectDetailScreen({ projectId }: { projectId: string }) {
   useEffect(() => {
     const workspaceId = window.localStorage.getItem(activeWorkspaceStorageKey);
 
-    if (!workspaceId || project || status.type !== 'idle') {
+    if (!workspaceId || !session || project || status.type !== 'idle') {
       return;
     }
 
@@ -1281,10 +1310,26 @@ function ProjectDetailScreen({ projectId }: { projectId: string }) {
             fetchProjectDetails(workspaceId, projectId),
             fetchProjectDocuments(workspaceId, projectId),
           ]);
+        const loadedRole = workspaceDetails.members.find(
+          (member) => member.userSub === session.user.sub,
+        )?.role;
+        const shareEntries = canManageProjects(loadedRole)
+          ? await Promise.all(
+              projectDocuments.map(async (projectDocument) => [
+                projectDocument.id,
+                await fetchProjectDocumentShares(
+                  workspaceId,
+                  projectId,
+                  projectDocument.id,
+                ),
+              ]),
+            )
+          : [];
 
         setWorkspace(workspaceDetails);
         setProject(projectDetails);
         setDocuments(projectDocuments);
+        setDocumentSharesById(Object.fromEntries(shareEntries));
         setProjectName(projectDetails.name);
         setProjectDescription(projectDetails.description ?? '');
         setStatus({ type: 'idle', message: null });
@@ -1298,7 +1343,7 @@ function ProjectDetailScreen({ projectId }: { projectId: string }) {
     }
 
     void loadProject();
-  }, [project, projectId, status.type]);
+  }, [project, projectId, session, status.type]);
 
   async function submitProjectUpdate(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1382,6 +1427,113 @@ function ProjectDetailScreen({ projectId }: { projectId: string }) {
         type: 'error',
         message:
           error instanceof Error ? error.message : 'Unable to upload document.',
+      });
+    }
+  }
+
+  async function submitDocumentShare(
+    event: React.FormEvent<HTMLFormElement>,
+    document: ProjectDocumentResponse,
+  ) {
+    event.preventDefault();
+
+    if (!workspace || !project || !canManage) {
+      return;
+    }
+
+    const userSub = shareRecipientsByDocumentId[document.id];
+    if (!userSub) {
+      setShareStatus({
+        type: 'error',
+        documentId: document.id,
+        message: 'Choose a workspace user to share with.',
+      });
+      return;
+    }
+
+    setShareStatus({
+      type: 'loading',
+      documentId: document.id,
+      message: 'Sharing document.',
+    });
+
+    try {
+      const result = await shareProjectDocumentRequest(
+        workspace.workspace.id,
+        project.id,
+        document.id,
+        userSub,
+      );
+
+      setDocumentSharesById((currentShares) => ({
+        ...currentShares,
+        [document.id]: upsertDocumentShare(
+          currentShares[document.id] ?? [],
+          result.share,
+        ),
+      }));
+      setShareRecipientsByDocumentId((currentRecipients) => ({
+        ...currentRecipients,
+        [document.id]: '',
+      }));
+      setShareStatus({
+        type: 'success',
+        documentId: document.id,
+        message:
+          result.email && typeof result.email === 'object'
+            ? 'Document shared and notification handled.'
+            : 'Document share already exists.',
+      });
+    } catch (error) {
+      setShareStatus({
+        type: 'error',
+        documentId: document.id,
+        message:
+          error instanceof Error ? error.message : 'Unable to share document.',
+      });
+    }
+  }
+
+  async function removeDocumentShare(
+    document: ProjectDocumentResponse,
+    userSub: string,
+  ) {
+    if (!workspace || !project || !canManage) {
+      return;
+    }
+
+    setShareStatus({
+      type: 'loading',
+      documentId: document.id,
+      message: 'Removing share.',
+    });
+
+    try {
+      await unshareProjectDocumentRequest(
+        workspace.workspace.id,
+        project.id,
+        document.id,
+        userSub,
+      );
+      setDocumentSharesById((currentShares) => ({
+        ...currentShares,
+        [document.id]: (currentShares[document.id] ?? []).filter(
+          (share) => share.userSub !== userSub,
+        ),
+      }));
+      setShareStatus({
+        type: 'success',
+        documentId: document.id,
+        message: 'Document share removed.',
+      });
+    } catch (error) {
+      setShareStatus({
+        type: 'error',
+        documentId: document.id,
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Unable to remove document share.',
       });
     }
   }
@@ -1523,43 +1675,175 @@ function ProjectDetailScreen({ projectId }: { projectId: string }) {
             <span className="role-pill">{documents.length}</span>
           </div>
           {documents.length === 0 ? (
-            <p>No documents have been uploaded to this project.</p>
+            <p>
+              {currentRole === 'guest'
+                ? 'No documents have been shared with you in this project.'
+                : 'No documents have been uploaded to this project.'}
+            </p>
           ) : (
             <div className="document-grid">
               {documents.map((document) => (
                 <article className="document-card" key={document.id}>
-                  <div className="document-card-topline">
-                    <span className="document-type">
-                      {documentTypeLabel(document.contentType)}
-                    </span>
-                    <span>{formatBytes(document.sizeBytes)}</span>
-                  </div>
-                  <h3>{document.fileName}</h3>
-                  <p>Uploaded by {document.uploaderSub}</p>
-                  <p>{formatDate(document.uploadedAt)}</p>
-                  <div className="document-actions">
-                    <a
-                      className="button secondary-button compact-button"
-                      href={projectDocumentViewerUrl(
-                        document.projectId,
-                        document.id,
-                      )}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      View
-                    </a>
-                    <a
-                      className="button secondary-button compact-button"
-                      href={`${projectDocumentUrl(
-                        document.workspaceId,
-                        document.projectId,
-                        document.id,
-                      )}/download`}
-                    >
-                      Download
-                    </a>
-                  </div>
+                  {(() => {
+                    const documentShares =
+                      documentSharesById[document.id] ?? [];
+                    const sharedUserSubs = new Set(
+                      documentShares.map((share) => share.userSub),
+                    );
+                    const shareableMembers =
+                      workspace?.members.filter(
+                        (member) =>
+                          member.userSub !== session.user.sub &&
+                          !sharedUserSubs.has(member.userSub),
+                      ) ?? [];
+                    const selectedRecipient =
+                      shareRecipientsByDocumentId[document.id] ?? '';
+
+                    return (
+                      <>
+                        <div className="document-card-topline">
+                          <span className="document-type">
+                            {documentTypeLabel(document.contentType)}
+                          </span>
+                          <span>{formatBytes(document.sizeBytes)}</span>
+                        </div>
+                        <h3>{document.fileName}</h3>
+                        <p>Uploaded by {document.uploaderSub}</p>
+                        <p>{formatDate(document.uploadedAt)}</p>
+                        <div className="document-actions">
+                          <a
+                            className="button secondary-button compact-button"
+                            href={projectDocumentViewerUrl(
+                              document.projectId,
+                              document.id,
+                            )}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            View
+                          </a>
+                          <a
+                            className="button secondary-button compact-button"
+                            href={`${projectDocumentUrl(
+                              document.workspaceId,
+                              document.projectId,
+                              document.id,
+                            )}/download`}
+                          >
+                            Download
+                          </a>
+                        </div>
+                        {canManage ? (
+                          <div
+                            className="share-controls"
+                            role="dialog"
+                            aria-label={`Share ${document.fileName}`}
+                          >
+                            <div>
+                              <p className="share-heading">Shared with</p>
+                              {documentShares.length === 0 ? (
+                                <p>No direct shares.</p>
+                              ) : (
+                                <ul className="share-list">
+                                  {documentShares.map((share) => (
+                                    <li key={share.userSub}>
+                                      <span>
+                                        {workspaceMemberLabel(
+                                          workspace,
+                                          share.userSub,
+                                        )}
+                                      </span>
+                                      <button
+                                        className="button secondary-button compact-button"
+                                        type="button"
+                                        disabled={
+                                          shareStatus.type === 'loading' &&
+                                          shareStatus.documentId === document.id
+                                        }
+                                        onClick={() =>
+                                          void removeDocumentShare(
+                                            document,
+                                            share.userSub,
+                                          )
+                                        }
+                                      >
+                                        Remove
+                                      </button>
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+                            </div>
+                            <form
+                              className="share-form"
+                              onSubmit={(event) =>
+                                void submitDocumentShare(event, document)
+                              }
+                            >
+                              <label htmlFor={`share-${document.id}`}>
+                                Share with
+                              </label>
+                              <div className="share-form-row">
+                                <select
+                                  id={`share-${document.id}`}
+                                  value={selectedRecipient}
+                                  disabled={shareableMembers.length === 0}
+                                  onChange={(event) => {
+                                    const userSub = event.target.value;
+                                    setShareRecipientsByDocumentId(
+                                      (currentRecipients) => ({
+                                        ...currentRecipients,
+                                        [document.id]: userSub,
+                                      }),
+                                    );
+                                  }}
+                                >
+                                  <option value="">
+                                    {shareableMembers.length === 0
+                                      ? 'No more users'
+                                      : 'Choose user'}
+                                  </option>
+                                  {shareableMembers.map((member) => (
+                                    <option
+                                      key={member.userSub}
+                                      value={member.userSub}
+                                    >
+                                      {member.userSub} ({member.role})
+                                    </option>
+                                  ))}
+                                </select>
+                                <button
+                                  className="button primary-button compact-button"
+                                  type="submit"
+                                  disabled={
+                                    !selectedRecipient ||
+                                    (shareStatus.type === 'loading' &&
+                                      shareStatus.documentId === document.id)
+                                  }
+                                >
+                                  Share
+                                </button>
+                              </div>
+                            </form>
+                            {shareStatus.documentId === document.id &&
+                            shareStatus.message ? (
+                              <p
+                                className={
+                                  shareStatus.type === 'error'
+                                    ? 'inline-alert'
+                                    : shareStatus.type === 'success'
+                                      ? 'share-status success-text'
+                                      : 'share-status'
+                                }
+                              >
+                                {shareStatus.message}
+                              </p>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </>
+                    );
+                  })()}
                 </article>
               ))}
             </div>
@@ -2028,6 +2312,67 @@ async function fetchProjectDocuments(
   return body.documents;
 }
 
+async function fetchProjectDocumentShares(
+  workspaceId: string,
+  projectId: string,
+  documentId: string,
+): Promise<ProjectDocumentShareResponse[]> {
+  const response = await apiFetch(
+    `/api/workspaces/${encodeURIComponent(
+      workspaceId,
+    )}/projects/${encodeURIComponent(projectId)}/documents/${encodeURIComponent(
+      documentId,
+    )}/shares`,
+  );
+  const body =
+    await readApiResponse<ProjectDocumentShareListResponse>(response);
+
+  return body.shares;
+}
+
+async function shareProjectDocumentRequest(
+  workspaceId: string,
+  projectId: string,
+  documentId: string,
+  userSub: string,
+): Promise<ProjectDocumentShareMutationResponse> {
+  const response = await apiFetch(
+    `/api/workspaces/${encodeURIComponent(
+      workspaceId,
+    )}/projects/${encodeURIComponent(projectId)}/documents/${encodeURIComponent(
+      documentId,
+    )}/shares`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ userSub }),
+    },
+  );
+
+  return readApiResponse<ProjectDocumentShareMutationResponse>(response);
+}
+
+async function unshareProjectDocumentRequest(
+  workspaceId: string,
+  projectId: string,
+  documentId: string,
+  userSub: string,
+): Promise<void> {
+  const response = await apiFetch(
+    `/api/workspaces/${encodeURIComponent(
+      workspaceId,
+    )}/projects/${encodeURIComponent(projectId)}/documents/${encodeURIComponent(
+      documentId,
+    )}/shares/${encodeURIComponent(userSub)}`,
+    {
+      method: 'DELETE',
+    },
+  );
+
+  if (!response.ok) {
+    await readApiResponse<unknown>(response);
+  }
+}
+
 async function uploadProjectDocumentRequest(
   workspaceId: string,
   projectId: string,
@@ -2355,8 +2700,32 @@ function parseJsonResponse(value: string): unknown {
   }
 }
 
-function canManageProjects(role: WorkspaceRole): boolean {
+function canManageProjects(role: WorkspaceRole | undefined): boolean {
   return role === 'owner' || role === 'member';
+}
+
+function upsertDocumentShare(
+  shares: ProjectDocumentShareResponse[],
+  nextShare: ProjectDocumentShareResponse,
+): ProjectDocumentShareResponse[] {
+  const withoutExistingShare = shares.filter(
+    (share) => share.userSub !== nextShare.userSub,
+  );
+
+  return [...withoutExistingShare, nextShare].sort((left, right) =>
+    left.userSub.localeCompare(right.userSub),
+  );
+}
+
+function workspaceMemberLabel(
+  workspace: WorkspaceDetailsResponse | null,
+  userSub: string,
+): string {
+  const member = workspace?.members.find(
+    (workspaceMember) => workspaceMember.userSub === userSub,
+  );
+
+  return member ? `${member.userSub} (${member.role})` : userSub;
 }
 
 function friendlyInvitationError(message: string): string {
