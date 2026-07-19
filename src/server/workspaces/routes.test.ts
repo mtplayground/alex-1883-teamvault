@@ -126,6 +126,36 @@ test('workspace invitation endpoint creates token and sends email', async () => 
   assert.match(sentEmails[0]?.text ?? '', /Accept invitation:/);
 });
 
+test('invitation accept endpoint adds verified user membership', async () => {
+  const db = routeDb([
+    userRow(),
+    invitationRows('owner@example.test', 'guest'),
+    acceptedInvitationRows('owner@example.test', 'guest'),
+  ]);
+  const response = await withWorkspaceServer(db, (baseUrl) =>
+    fetch(`${baseUrl}/api/workspaces/invitations/accept`, {
+      method: 'POST',
+      headers: {
+        cookie: 'mctai_session=valid',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ token: 'route-token' }),
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    invitation: invitationResponse('owner@example.test', 'guest', now),
+    membership: {
+      workspaceId: 'workspace-1',
+      userSub: 'auth|123',
+      role: 'guest',
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    },
+  });
+});
+
 async function withWorkspaceServer(
   db: WorkspaceQueryable,
   request: (baseUrl: string) => Promise<Response>,
@@ -217,7 +247,11 @@ function membershipRows(role: 'owner' | 'member' | 'guest') {
   };
 }
 
-function invitationRows(email: string, role: 'member' | 'guest') {
+function invitationRows(
+  email: string,
+  role: 'member' | 'guest',
+  acceptedAt: Date | null = null,
+) {
   return {
     rows: [
       {
@@ -231,14 +265,33 @@ function invitationRows(email: string, role: 'member' | 'guest') {
         created_at: now,
         updated_at: now,
         expires_at: new Date('2026-07-26T00:00:00.000Z'),
-        accepted_at: null,
+        accepted_at: acceptedAt,
         revoked_at: null,
       },
     ],
   };
 }
 
-function invitationResponse(email: string, role: 'member' | 'guest') {
+function acceptedInvitationRows(email: string, role: 'member' | 'guest') {
+  return {
+    rows: [
+      {
+        ...invitationRows(email, role, now).rows[0],
+        member_workspace_id: 'workspace-1',
+        member_user_sub: 'auth|123',
+        member_role: role,
+        member_created_at: now,
+        member_updated_at: now,
+      },
+    ],
+  };
+}
+
+function invitationResponse(
+  email: string,
+  role: 'member' | 'guest',
+  acceptedAt: Date | null = null,
+) {
   return {
     id: 'invite-1',
     workspaceId: 'workspace-1',
@@ -248,7 +301,7 @@ function invitationResponse(email: string, role: 'member' | 'guest') {
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
     expiresAt: '2026-07-26T00:00:00.000Z',
-    acceptedAt: null,
+    acceptedAt: acceptedAt?.toISOString() ?? null,
     revokedAt: null,
   };
 }

@@ -19,6 +19,8 @@ import {
   requireWorkspaceOwner,
   revokeWorkspaceInvitation,
   updateWorkspaceSettings,
+  acceptWorkspaceInvitation,
+  WorkspaceInvitationError,
   WorkspaceNotFoundError,
   WorkspacePermissionError,
   type InvitationTokenGenerator,
@@ -65,6 +67,30 @@ export function createWorkspaceRouter({
       const details = await getWorkspaceDetails(db, workspace.id);
 
       res.status(201).json(workspaceDetailsResponse(details));
+    } catch (error) {
+      handleWorkspaceError(error, res, next);
+    }
+  });
+
+  router.post('/invitations/accept', async (req, res, next) => {
+    try {
+      const currentUser = currentUserLocals(res).currentUser;
+      const result = await acceptWorkspaceInvitation(db, {
+        token: readBodyString(req, 'token'),
+        userSub: currentUser.sub,
+        userEmail: currentUser.email,
+      });
+
+      res.json({
+        invitation: invitationResponse(result.invitation),
+        membership: {
+          workspaceId: result.membership.workspaceId,
+          userSub: result.membership.userSub,
+          role: result.membership.role,
+          createdAt: result.membership.createdAt.toISOString(),
+          updatedAt: result.membership.updatedAt.toISOString(),
+        },
+      });
     } catch (error) {
       handleWorkspaceError(error, res, next);
     }
@@ -255,6 +281,11 @@ function handleWorkspaceError(
 
   if (error instanceof WorkspacePermissionError) {
     res.status(403).json({ error: error.message });
+    return;
+  }
+
+  if (error instanceof WorkspaceInvitationError) {
+    res.status(error.statusCode).json({ error: error.message });
     return;
   }
 
