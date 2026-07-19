@@ -29,6 +29,22 @@ export interface NewMembershipInput {
   role: WorkspaceRole;
 }
 
+export interface WorkspaceInvitation {
+  id: string;
+  workspaceId: string;
+  email: string;
+  role: WorkspaceInviteRole;
+  tokenHash: string;
+  invitedBySub: string;
+  createdAt: Date;
+  updatedAt: Date;
+  expiresAt: Date;
+  acceptedAt: Date | null;
+  revokedAt: Date | null;
+}
+
+export type WorkspaceInviteRole = Exclude<WorkspaceRole, 'owner'>;
+
 export function normalizeWorkspaceName(name: string): string {
   const normalized = name.trim();
 
@@ -46,6 +62,20 @@ export function isWorkspaceRole(value: string): value is WorkspaceRole {
 export function parseWorkspaceRole(value: string): WorkspaceRole {
   if (!isWorkspaceRole(value)) {
     throw new Error(`unsupported workspace role: ${value}`);
+  }
+
+  return value;
+}
+
+export function isWorkspaceInviteRole(
+  value: string,
+): value is WorkspaceInviteRole {
+  return value === 'member' || value === 'guest';
+}
+
+export function parseWorkspaceInviteRole(value: string): WorkspaceInviteRole {
+  if (!isWorkspaceInviteRole(value)) {
+    throw new Error(`unsupported workspace invitation role: ${value}`);
   }
 
   return value;
