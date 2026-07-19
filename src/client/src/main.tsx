@@ -149,6 +149,21 @@ function App() {
     );
   }
 
+  const documentViewerMatch = path.match(
+    /^\/projects\/([^/]+)\/documents\/([^/]+)$/,
+  );
+
+  if (documentViewerMatch) {
+    return (
+      <ProtectedRoute>
+        <ProjectDocumentViewerScreen
+          projectId={decodeURIComponent(documentViewerMatch[1] ?? '')}
+          documentId={decodeURIComponent(documentViewerMatch[2] ?? '')}
+        />
+      </ProtectedRoute>
+    );
+  }
+
   if (path.startsWith('/projects/')) {
     return (
       <ProtectedRoute>
@@ -1525,8 +1540,7 @@ function ProjectDetailScreen({ projectId }: { projectId: string }) {
                   <div className="document-actions">
                     <a
                       className="button secondary-button compact-button"
-                      href={projectDocumentUrl(
-                        document.workspaceId,
+                      href={projectDocumentViewerUrl(
                         document.projectId,
                         document.id,
                       )}
@@ -1618,6 +1632,176 @@ function ProjectDetailScreen({ projectId }: { projectId: string }) {
               Save project
             </button>
           </form>
+        </section>
+      ) : null}
+    </main>
+  );
+}
+
+function ProjectDocumentViewerScreen({
+  projectId,
+  documentId,
+}: {
+  projectId: string;
+  documentId: string;
+}) {
+  const { state } = useAuth();
+  const session = signedInSession(state);
+  const [project, setProject] = useState<ProjectResponse | null>(null);
+  const [document, setDocument] = useState<ProjectDocumentResponse | null>(
+    null,
+  );
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [status, setStatus] = useState<
+    | { type: 'idle'; message: string | null }
+    | { type: 'loading'; message: string }
+    | { type: 'error'; message: string }
+  >({ type: 'idle', message: null });
+
+  useEffect(() => {
+    const workspaceId = window.localStorage.getItem(activeWorkspaceStorageKey);
+
+    if (!workspaceId || document || status.type !== 'idle') {
+      return;
+    }
+
+    async function loadDocument() {
+      setStatus({ type: 'loading', message: 'Loading document.' });
+
+      try {
+        const [projectDetails, projectDocuments] = await Promise.all([
+          fetchProjectDetails(workspaceId, projectId),
+          fetchProjectDocuments(workspaceId, projectId),
+        ]);
+        const matchingDocument =
+          projectDocuments.find(
+            (projectDocument) => projectDocument.id === documentId,
+          ) ?? null;
+
+        if (!matchingDocument) {
+          setStatus({
+            type: 'error',
+            message:
+              'This document is unavailable or you no longer have access.',
+          });
+          return;
+        }
+
+        setProject(projectDetails);
+        setDocument(matchingDocument);
+        setStatus({ type: 'idle', message: null });
+      } catch (error) {
+        setStatus({
+          type: 'error',
+          message:
+            error instanceof Error ? error.message : 'Unable to load document.',
+        });
+      }
+    }
+
+    void loadDocument();
+  }, [document, documentId, projectId, status.type]);
+
+  if (!session) {
+    return null;
+  }
+
+  if (!window.localStorage.getItem(activeWorkspaceStorageKey)) {
+    return (
+      <main className="app-shell centered-shell">
+        <StatusPanel title="Workspace required" tone="neutral">
+          <p>Open a workspace before viewing documents.</p>
+          <a className="button primary-button" href="/dashboard">
+            Open dashboard
+          </a>
+        </StatusPanel>
+      </main>
+    );
+  }
+
+  const viewerUrl = document
+    ? projectDocumentUrl(document.workspaceId, document.projectId, document.id)
+    : '';
+  const downloadUrl = document ? `${viewerUrl}/download` : '';
+  const isImage = document?.contentType.startsWith('image/') ?? false;
+  const isPdf = document?.contentType === 'application/pdf';
+  const canPreview = isImage || isPdf;
+
+  return (
+    <main className="app-shell signed-in-shell">
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">Document viewer</p>
+          <h1>{document?.fileName ?? 'Document'}</h1>
+        </div>
+        <div className="topbar-actions">
+          <UserBadge user={session.user} />
+          <a
+            className="button secondary-button"
+            href={`/projects/${encodeURIComponent(projectId)}`}
+          >
+            Project
+          </a>
+        </div>
+      </header>
+
+      {status.type !== 'idle' || status.message ? (
+        <p
+          className={
+            status.type === 'error' ? 'inline-alert dashboard-alert' : 'notice'
+          }
+        >
+          {status.message}
+        </p>
+      ) : null}
+
+      {document ? (
+        <section className="workspace-panel viewer-panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">
+                {documentTypeLabel(document.contentType)}
+              </p>
+              <h2>{project?.name ?? 'Project document'}</h2>
+            </div>
+            <a className="button primary-button" href={downloadUrl}>
+              Download
+            </a>
+          </div>
+          <p>
+            Uploaded by {document.uploaderSub} -{' '}
+            {formatBytes(document.sizeBytes)}
+          </p>
+          {previewError ? (
+            <p className="inline-alert dashboard-alert">{previewError}</p>
+          ) : null}
+          {canPreview ? (
+            isImage ? (
+              <img
+                className="document-viewer-image"
+                src={viewerUrl}
+                alt={document.fileName}
+                onError={() =>
+                  setPreviewError(
+                    'The image preview is unavailable. Use Download to save the file.',
+                  )
+                }
+              />
+            ) : (
+              <iframe
+                className="document-viewer-frame"
+                src={viewerUrl}
+                title={document.fileName}
+              />
+            )
+          ) : (
+            <div className="viewer-fallback">
+              <p>This file type cannot be previewed in the browser.</p>
+              <a className="button primary-button" href={downloadUrl}>
+                Download file
+              </a>
+            </div>
+          )}
         </section>
       ) : null}
     </main>
@@ -2150,6 +2334,15 @@ function projectDocumentUrl(
   return `/api/workspaces/${encodeURIComponent(
     workspaceId,
   )}/projects/${encodeURIComponent(projectId)}/documents/${encodeURIComponent(
+    documentId,
+  )}`;
+}
+
+function projectDocumentViewerUrl(
+  projectId: string,
+  documentId: string,
+): string {
+  return `/projects/${encodeURIComponent(projectId)}/documents/${encodeURIComponent(
     documentId,
   )}`;
 }
