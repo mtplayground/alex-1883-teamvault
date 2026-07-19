@@ -77,7 +77,19 @@ interface ProjectDetailsResponse {
   project: ProjectResponse;
 }
 
+interface ProjectFormValues {
+  name: string;
+  description: string;
+}
+
+interface ProjectFormErrors {
+  name?: string;
+  description?: string;
+}
+
 const activeWorkspaceStorageKey = 'active-workspace-id';
+const projectNameMaxLength = 120;
+const projectDescriptionMaxLength = 1000;
 
 function App() {
   const path = window.location.pathname;
@@ -948,9 +960,11 @@ function ProjectsListScreen() {
   const [projects, setProjects] = useState<ProjectResponse[]>([]);
   const [projectName, setProjectName] = useState('');
   const [projectDescription, setProjectDescription] = useState('');
+  const [formErrors, setFormErrors] = useState<ProjectFormErrors>({});
   const [status, setStatus] = useState<
     | { type: 'idle'; message: string | null }
     | { type: 'loading'; message: string }
+    | { type: 'success'; message: string }
     | { type: 'error'; message: string }
   >({ type: 'idle', message: null });
   const currentRole = workspace?.members.find(
@@ -996,25 +1010,35 @@ function ProjectsListScreen() {
       return;
     }
 
-    const name = projectName.trim();
-    if (name.length === 0) {
-      setStatus({ type: 'error', message: 'Project name is required.' });
+    const validatedForm = validateProjectForm({
+      name: projectName,
+      description: projectDescription,
+    });
+
+    if (!validatedForm.ok) {
+      setFormErrors(validatedForm.errors);
+      setStatus({
+        type: 'error',
+        message: 'Review the highlighted fields before creating the project.',
+      });
       return;
     }
 
+    setFormErrors({});
     setStatus({ type: 'loading', message: 'Creating project.' });
 
     try {
       const project = await createProjectRequest(
         workspace.workspace.id,
-        name,
-        projectDescription,
+        validatedForm.values.name,
+        validatedForm.values.description,
       );
 
       setProjects((currentProjects) => [project, ...currentProjects]);
       setProjectName('');
       setProjectDescription('');
-      setStatus({ type: 'idle', message: 'Project created.' });
+      setFormErrors({});
+      setStatus({ type: 'success', message: 'Project created.' });
     } catch (error) {
       setStatus({
         type: 'error',
@@ -1059,7 +1083,11 @@ function ProjectsListScreen() {
       {status.type !== 'idle' || status.message ? (
         <p
           className={
-            status.type === 'error' ? 'inline-alert dashboard-alert' : 'notice'
+            status.type === 'error'
+              ? 'inline-alert dashboard-alert'
+              : status.type === 'success'
+                ? 'notice success-notice'
+                : 'notice'
           }
         >
           {status.message}
@@ -1077,16 +1105,54 @@ function ProjectsListScreen() {
             <input
               id="project-name"
               value={projectName}
-              onChange={(event) => setProjectName(event.target.value)}
+              maxLength={projectNameMaxLength}
+              aria-invalid={formErrors.name ? 'true' : undefined}
+              aria-describedby={
+                formErrors.name ? 'project-name-error' : undefined
+              }
+              onChange={(event) => {
+                setProjectName(event.target.value);
+                setFormErrors((currentErrors) => ({
+                  ...currentErrors,
+                  name: undefined,
+                }));
+              }}
               placeholder="Launch plan"
             />
+            {formErrors.name ? (
+              <p className="field-error" id="project-name-error">
+                {formErrors.name}
+              </p>
+            ) : null}
             <label htmlFor="project-description">Description</label>
             <textarea
               id="project-description"
               value={projectDescription}
-              onChange={(event) => setProjectDescription(event.target.value)}
+              maxLength={projectDescriptionMaxLength}
+              aria-invalid={formErrors.description ? 'true' : undefined}
+              aria-describedby={
+                formErrors.description
+                  ? 'project-description-error'
+                  : 'project-description-hint'
+              }
+              onChange={(event) => {
+                setProjectDescription(event.target.value);
+                setFormErrors((currentErrors) => ({
+                  ...currentErrors,
+                  description: undefined,
+                }));
+              }}
               placeholder="Notes, files, and milestones"
             />
+            {formErrors.description ? (
+              <p className="field-error" id="project-description-error">
+                {formErrors.description}
+              </p>
+            ) : (
+              <p className="field-hint" id="project-description-hint">
+                Optional. Up to {projectDescriptionMaxLength} characters.
+              </p>
+            )}
             <button
               className="button primary-button"
               type="submit"
@@ -1139,9 +1205,11 @@ function ProjectDetailScreen({ projectId }: { projectId: string }) {
   const [project, setProject] = useState<ProjectResponse | null>(null);
   const [projectName, setProjectName] = useState('');
   const [projectDescription, setProjectDescription] = useState('');
+  const [formErrors, setFormErrors] = useState<ProjectFormErrors>({});
   const [status, setStatus] = useState<
     | { type: 'idle'; message: string | null }
     | { type: 'loading'; message: string }
+    | { type: 'success'; message: string }
     | { type: 'error'; message: string }
   >({ type: 'idle', message: null });
   const currentRole = workspace?.members.find(
@@ -1189,26 +1257,36 @@ function ProjectDetailScreen({ projectId }: { projectId: string }) {
       return;
     }
 
-    const name = projectName.trim();
-    if (name.length === 0) {
-      setStatus({ type: 'error', message: 'Project name is required.' });
+    const validatedForm = validateProjectForm({
+      name: projectName,
+      description: projectDescription,
+    });
+
+    if (!validatedForm.ok) {
+      setFormErrors(validatedForm.errors);
+      setStatus({
+        type: 'error',
+        message: 'Review the highlighted fields before saving the project.',
+      });
       return;
     }
 
+    setFormErrors({});
     setStatus({ type: 'loading', message: 'Saving project.' });
 
     try {
       const updatedProject = await updateProjectRequest(
         workspace.workspace.id,
         project.id,
-        name,
-        projectDescription,
+        validatedForm.values.name,
+        validatedForm.values.description,
       );
 
       setProject(updatedProject);
       setProjectName(updatedProject.name);
       setProjectDescription(updatedProject.description ?? '');
-      setStatus({ type: 'idle', message: 'Project saved.' });
+      setFormErrors({});
+      setStatus({ type: 'success', message: 'Project saved.' });
     } catch (error) {
       setStatus({
         type: 'error',
@@ -1253,7 +1331,11 @@ function ProjectDetailScreen({ projectId }: { projectId: string }) {
       {status.type !== 'idle' || status.message ? (
         <p
           className={
-            status.type === 'error' ? 'inline-alert dashboard-alert' : 'notice'
+            status.type === 'error'
+              ? 'inline-alert dashboard-alert'
+              : status.type === 'success'
+                ? 'notice success-notice'
+                : 'notice'
           }
         >
           {status.message}
@@ -1287,14 +1369,52 @@ function ProjectDetailScreen({ projectId }: { projectId: string }) {
             <input
               id="edit-project-name"
               value={projectName}
-              onChange={(event) => setProjectName(event.target.value)}
+              maxLength={projectNameMaxLength}
+              aria-invalid={formErrors.name ? 'true' : undefined}
+              aria-describedby={
+                formErrors.name ? 'edit-project-name-error' : undefined
+              }
+              onChange={(event) => {
+                setProjectName(event.target.value);
+                setFormErrors((currentErrors) => ({
+                  ...currentErrors,
+                  name: undefined,
+                }));
+              }}
             />
+            {formErrors.name ? (
+              <p className="field-error" id="edit-project-name-error">
+                {formErrors.name}
+              </p>
+            ) : null}
             <label htmlFor="edit-project-description">Description</label>
             <textarea
               id="edit-project-description"
               value={projectDescription}
-              onChange={(event) => setProjectDescription(event.target.value)}
+              maxLength={projectDescriptionMaxLength}
+              aria-invalid={formErrors.description ? 'true' : undefined}
+              aria-describedby={
+                formErrors.description
+                  ? 'edit-project-description-error'
+                  : 'edit-project-description-hint'
+              }
+              onChange={(event) => {
+                setProjectDescription(event.target.value);
+                setFormErrors((currentErrors) => ({
+                  ...currentErrors,
+                  description: undefined,
+                }));
+              }}
             />
+            {formErrors.description ? (
+              <p className="field-error" id="edit-project-description-error">
+                {formErrors.description}
+              </p>
+            ) : (
+              <p className="field-hint" id="edit-project-description-hint">
+                Optional. Up to {projectDescriptionMaxLength} characters.
+              </p>
+            )}
             <button
               className="button primary-button"
               type="submit"
@@ -1669,6 +1789,33 @@ function DocumentPreview() {
 
 function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function validateProjectForm(values: ProjectFormValues):
+  | { ok: true; values: ProjectFormValues }
+  | {
+      ok: false;
+      errors: ProjectFormErrors;
+    } {
+  const name = values.name.trim();
+  const description = values.description.trim();
+  const errors: ProjectFormErrors = {};
+
+  if (name.length === 0) {
+    errors.name = 'Project name is required.';
+  } else if (name.length > projectNameMaxLength) {
+    errors.name = `Project name must be ${projectNameMaxLength} characters or fewer.`;
+  }
+
+  if (description.length > projectDescriptionMaxLength) {
+    errors.description = `Description must be ${projectDescriptionMaxLength} characters or fewer.`;
+  }
+
+  if (errors.name || errors.description) {
+    return { ok: false, errors };
+  }
+
+  return { ok: true, values: { name, description } };
 }
 
 function formatDate(value: string): string {

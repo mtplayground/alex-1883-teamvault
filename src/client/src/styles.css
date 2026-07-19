@@ -167,6 +167,13 @@ button:disabled,
   font-size: 0.92rem;
 }
 
+.field-hint {
+  margin: 8px 0 0;
+  color: #667586;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
 .document-preview {
   min-height: 420px;
   padding: 24px;
@@ -492,6 +499,12 @@ button:disabled,
   background: #ffffff;
   color: #365d73;
   font-weight: 800;
+}
+
+.success-notice {
+  border-color: #9cc7ad;
+  background: #f4fbf6;
+  color: #22663d;
 }
 
 .form-panel,
