@@ -9,6 +9,7 @@ import express, {
 import { readAuthConfig, readRuntimeConfig, readSelfUrl } from './config.js';
 import { createAuthRouter } from './auth/routes.js';
 import { closePool, smokeTestDatabase } from './db/pool.js';
+import { createWorkspaceRouter } from './workspaces/routes.js';
 import type { HealthResponse } from '../shared/health.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -27,6 +28,12 @@ app.use(
   createAuthRouter({
     authConfig: readAuthConfig(process.env),
     selfUrl: process.env.SELF_URL ? readSelfUrl(process.env) : null,
+  }),
+);
+app.use(
+  '/api/workspaces',
+  createWorkspaceRouter({
+    authConfig: readAuthConfig(process.env),
   }),
 );
 
