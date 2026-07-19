@@ -377,7 +377,9 @@ button:disabled,
 }
 
 .member-list,
-.pending-list {
+.pending-list,
+.project-grid,
+.project-form {
   display: grid;
   gap: 10px;
 }
@@ -449,6 +451,40 @@ button:disabled,
   min-height: 38px;
 }
 
+.project-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.project-card {
+  min-height: 132px;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 18px;
+  border: 1px solid #e1e6ec;
+  border-radius: 8px;
+  background: #fbfcfd;
+  text-decoration: none;
+}
+
+.project-card strong,
+.project-card span,
+.project-card small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.project-card span,
+.project-card small {
+  color: #667586;
+  line-height: 1.5;
+}
+
+.project-form {
+  grid-template-columns: minmax(220px, 1fr);
+}
+
 .notice {
   padding: 14px 16px;
   border: 1px solid #c7d0d9;
@@ -490,6 +526,17 @@ input {
   color: #17202a;
 }
 
+textarea {
+  width: 100%;
+  min-height: 92px;
+  padding: 12px 14px;
+  border: 1px solid #bdc7d2;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #17202a;
+  resize: vertical;
+}
+
 select {
   width: 100%;
   min-height: 46px;
@@ -501,6 +548,7 @@ select {
 }
 
 input:focus,
+textarea:focus,
 select:focus {
   outline: 3px solid rgba(31, 111, 235, 0.2);
   border-color: #1f6feb;
@@ -549,7 +597,8 @@ input[aria-invalid='true'] {
 
   .hero-grid,
   .dashboard-grid,
-  .invite-form {
+  .invite-form,
+  .project-grid {
     grid-template-columns: 1fr;
   }
 
