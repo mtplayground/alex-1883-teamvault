@@ -60,6 +60,23 @@ interface InvitationAcceptResponse {
   };
 }
 
+interface ProjectResponse {
+  id: string;
+  workspaceId: string;
+  name: string;
+  description: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface ProjectListResponse {
+  projects: ProjectResponse[];
+}
+
+interface ProjectDetailsResponse {
+  project: ProjectResponse;
+}
+
 const activeWorkspaceStorageKey = 'active-workspace-id';
 
 function App() {
@@ -85,6 +102,22 @@ function App() {
     return (
       <ProtectedRoute>
         <DashboardScreen />
+      </ProtectedRoute>
+    );
+  }
+
+  if (path === '/projects') {
+    return (
+      <ProtectedRoute>
+        <ProjectsListScreen />
+      </ProtectedRoute>
+    );
+  }
+
+  if (path.startsWith('/projects/')) {
+    return (
+      <ProtectedRoute>
+        <ProjectDetailScreen projectId={decodeURIComponent(path.slice(10))} />
       </ProtectedRoute>
     );
   }
@@ -521,6 +554,11 @@ function DashboardScreen() {
                 </div>
               ))}
             </div>
+            <div className="button-row compact-row">
+              <a className="button secondary-button" href="/projects">
+                View projects
+              </a>
+            </div>
           </section>
 
           {isOwner ? (
@@ -901,6 +939,376 @@ function ResetPasswordScreen() {
   );
 }
 
+function ProjectsListScreen() {
+  const { state } = useAuth();
+  const session = signedInSession(state);
+  const [workspace, setWorkspace] = useState<WorkspaceDetailsResponse | null>(
+    null,
+  );
+  const [projects, setProjects] = useState<ProjectResponse[]>([]);
+  const [projectName, setProjectName] = useState('');
+  const [projectDescription, setProjectDescription] = useState('');
+  const [status, setStatus] = useState<
+    | { type: 'idle'; message: string | null }
+    | { type: 'loading'; message: string }
+    | { type: 'error'; message: string }
+  >({ type: 'idle', message: null });
+  const currentRole = workspace?.members.find(
+    (member) => member.userSub === session?.user.sub,
+  )?.role;
+  const canManage = currentRole ? canManageProjects(currentRole) : false;
+
+  useEffect(() => {
+    const workspaceId = window.localStorage.getItem(activeWorkspaceStorageKey);
+
+    if (!workspaceId || workspace || status.type !== 'idle') {
+      return;
+    }
+
+    async function loadProjects() {
+      setStatus({ type: 'loading', message: 'Loading projects.' });
+
+      try {
+        const [workspaceDetails, projectList] = await Promise.all([
+          fetchWorkspaceDetails(workspaceId),
+          fetchProjects(workspaceId),
+        ]);
+
+        setWorkspace(workspaceDetails);
+        setProjects(projectList);
+        setStatus({ type: 'idle', message: null });
+      } catch (error) {
+        setStatus({
+          type: 'error',
+          message:
+            error instanceof Error ? error.message : 'Unable to load projects.',
+        });
+      }
+    }
+
+    void loadProjects();
+  }, [workspace, status.type]);
+
+  async function submitProject(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!workspace || !canManage) {
+      return;
+    }
+
+    const name = projectName.trim();
+    if (name.length === 0) {
+      setStatus({ type: 'error', message: 'Project name is required.' });
+      return;
+    }
+
+    setStatus({ type: 'loading', message: 'Creating project.' });
+
+    try {
+      const project = await createProjectRequest(
+        workspace.workspace.id,
+        name,
+        projectDescription,
+      );
+
+      setProjects((currentProjects) => [project, ...currentProjects]);
+      setProjectName('');
+      setProjectDescription('');
+      setStatus({ type: 'idle', message: 'Project created.' });
+    } catch (error) {
+      setStatus({
+        type: 'error',
+        message:
+          error instanceof Error ? error.message : 'Unable to create project.',
+      });
+    }
+  }
+
+  if (!session) {
+    return null;
+  }
+
+  if (!window.localStorage.getItem(activeWorkspaceStorageKey)) {
+    return (
+      <main className="app-shell centered-shell">
+        <StatusPanel title="Workspace required" tone="neutral">
+          <p>Create or open a workspace before viewing projects.</p>
+          <a className="button primary-button" href="/dashboard">
+            Open dashboard
+          </a>
+        </StatusPanel>
+      </main>
+    );
+  }
+
+  return (
+    <main className="app-shell signed-in-shell">
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">Projects</p>
+          <h1>{workspace?.workspace.name ?? 'Workspace projects'}</h1>
+        </div>
+        <div className="topbar-actions">
+          <UserBadge user={session.user} />
+          <a className="button secondary-button" href="/dashboard">
+            Dashboard
+          </a>
+        </div>
+      </header>
+
+      {status.type !== 'idle' || status.message ? (
+        <p
+          className={
+            status.type === 'error' ? 'inline-alert dashboard-alert' : 'notice'
+          }
+        >
+          {status.message}
+        </p>
+      ) : null}
+
+      {workspace && canManage ? (
+        <section className="workspace-panel" aria-labelledby="create-project">
+          <div>
+            <p className="eyebrow">Create project</p>
+            <h2 id="create-project">Add a workspace project.</h2>
+          </div>
+          <form className="project-form" onSubmit={submitProject}>
+            <label htmlFor="project-name">Project name</label>
+            <input
+              id="project-name"
+              value={projectName}
+              onChange={(event) => setProjectName(event.target.value)}
+              placeholder="Launch plan"
+            />
+            <label htmlFor="project-description">Description</label>
+            <textarea
+              id="project-description"
+              value={projectDescription}
+              onChange={(event) => setProjectDescription(event.target.value)}
+              placeholder="Notes, files, and milestones"
+            />
+            <button
+              className="button primary-button"
+              type="submit"
+              disabled={status.type === 'loading'}
+            >
+              Create project
+            </button>
+          </form>
+        </section>
+      ) : null}
+
+      <section className="workspace-panel" aria-labelledby="project-list">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Project list</p>
+            <h2 id="project-list">Workspace projects</h2>
+          </div>
+          {currentRole ? (
+            <span className="role-pill">{currentRole}</span>
+          ) : null}
+        </div>
+        {projects.length === 0 ? (
+          <p>No projects are visible in this workspace.</p>
+        ) : (
+          <div className="project-grid">
+            {projects.map((project) => (
+              <a
+                className="project-card"
+                href={`/projects/${encodeURIComponent(project.id)}`}
+                key={project.id}
+              >
+                <strong>{project.name}</strong>
+                <span>{project.description ?? 'No description'}</span>
+                <small>Updated {formatDate(project.updatedAt)}</small>
+              </a>
+            ))}
+          </div>
+        )}
+      </section>
+    </main>
+  );
+}
+
+function ProjectDetailScreen({ projectId }: { projectId: string }) {
+  const { state } = useAuth();
+  const session = signedInSession(state);
+  const [workspace, setWorkspace] = useState<WorkspaceDetailsResponse | null>(
+    null,
+  );
+  const [project, setProject] = useState<ProjectResponse | null>(null);
+  const [projectName, setProjectName] = useState('');
+  const [projectDescription, setProjectDescription] = useState('');
+  const [status, setStatus] = useState<
+    | { type: 'idle'; message: string | null }
+    | { type: 'loading'; message: string }
+    | { type: 'error'; message: string }
+  >({ type: 'idle', message: null });
+  const currentRole = workspace?.members.find(
+    (member) => member.userSub === session?.user.sub,
+  )?.role;
+  const canManage = currentRole ? canManageProjects(currentRole) : false;
+
+  useEffect(() => {
+    const workspaceId = window.localStorage.getItem(activeWorkspaceStorageKey);
+
+    if (!workspaceId || project || status.type !== 'idle') {
+      return;
+    }
+
+    async function loadProject() {
+      setStatus({ type: 'loading', message: 'Loading project.' });
+
+      try {
+        const [workspaceDetails, projectDetails] = await Promise.all([
+          fetchWorkspaceDetails(workspaceId),
+          fetchProjectDetails(workspaceId, projectId),
+        ]);
+
+        setWorkspace(workspaceDetails);
+        setProject(projectDetails);
+        setProjectName(projectDetails.name);
+        setProjectDescription(projectDetails.description ?? '');
+        setStatus({ type: 'idle', message: null });
+      } catch (error) {
+        setStatus({
+          type: 'error',
+          message:
+            error instanceof Error ? error.message : 'Unable to load project.',
+        });
+      }
+    }
+
+    void loadProject();
+  }, [project, projectId, status.type]);
+
+  async function submitProjectUpdate(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!workspace || !project || !canManage) {
+      return;
+    }
+
+    const name = projectName.trim();
+    if (name.length === 0) {
+      setStatus({ type: 'error', message: 'Project name is required.' });
+      return;
+    }
+
+    setStatus({ type: 'loading', message: 'Saving project.' });
+
+    try {
+      const updatedProject = await updateProjectRequest(
+        workspace.workspace.id,
+        project.id,
+        name,
+        projectDescription,
+      );
+
+      setProject(updatedProject);
+      setProjectName(updatedProject.name);
+      setProjectDescription(updatedProject.description ?? '');
+      setStatus({ type: 'idle', message: 'Project saved.' });
+    } catch (error) {
+      setStatus({
+        type: 'error',
+        message:
+          error instanceof Error ? error.message : 'Unable to save project.',
+      });
+    }
+  }
+
+  if (!session) {
+    return null;
+  }
+
+  if (!window.localStorage.getItem(activeWorkspaceStorageKey)) {
+    return (
+      <main className="app-shell centered-shell">
+        <StatusPanel title="Workspace required" tone="neutral">
+          <p>Open a workspace before viewing project details.</p>
+          <a className="button primary-button" href="/dashboard">
+            Open dashboard
+          </a>
+        </StatusPanel>
+      </main>
+    );
+  }
+
+  return (
+    <main className="app-shell signed-in-shell">
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">Project detail</p>
+          <h1>{project?.name ?? 'Project'}</h1>
+        </div>
+        <div className="topbar-actions">
+          <UserBadge user={session.user} />
+          <a className="button secondary-button" href="/projects">
+            Projects
+          </a>
+        </div>
+      </header>
+
+      {status.type !== 'idle' || status.message ? (
+        <p
+          className={
+            status.type === 'error' ? 'inline-alert dashboard-alert' : 'notice'
+          }
+        >
+          {status.message}
+        </p>
+      ) : null}
+
+      {project ? (
+        <section className="workspace-panel" aria-labelledby="project-detail">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">Details</p>
+              <h2 id="project-detail">{project.name}</h2>
+            </div>
+            {currentRole ? (
+              <span className="role-pill">{currentRole}</span>
+            ) : null}
+          </div>
+          <p>{project.description ?? 'No description has been added.'}</p>
+          <p>Updated {formatDate(project.updatedAt)}</p>
+        </section>
+      ) : null}
+
+      {project && canManage ? (
+        <section className="workspace-panel" aria-labelledby="edit-project">
+          <div>
+            <p className="eyebrow">Edit project</p>
+            <h2 id="edit-project">Update project details.</h2>
+          </div>
+          <form className="project-form" onSubmit={submitProjectUpdate}>
+            <label htmlFor="edit-project-name">Project name</label>
+            <input
+              id="edit-project-name"
+              value={projectName}
+              onChange={(event) => setProjectName(event.target.value)}
+            />
+            <label htmlFor="edit-project-description">Description</label>
+            <textarea
+              id="edit-project-description"
+              value={projectDescription}
+              onChange={(event) => setProjectDescription(event.target.value)}
+            />
+            <button
+              className="button primary-button"
+              type="submit"
+              disabled={status.type === 'loading'}
+            >
+              Save project
+            </button>
+          </form>
+        </section>
+      ) : null}
+    </main>
+  );
+}
+
 function InvitationAcceptScreen() {
   const { state } = useAuth();
   const token = useMemo(
@@ -1084,6 +1492,66 @@ async function fetchPendingInvitations(
   return body.invitations;
 }
 
+async function fetchProjects(workspaceId: string): Promise<ProjectResponse[]> {
+  const response = await apiFetch(
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/projects`,
+  );
+  const body = await readApiResponse<ProjectListResponse>(response);
+
+  return body.projects;
+}
+
+async function fetchProjectDetails(
+  workspaceId: string,
+  projectId: string,
+): Promise<ProjectResponse> {
+  const response = await apiFetch(
+    `/api/workspaces/${encodeURIComponent(
+      workspaceId,
+    )}/projects/${encodeURIComponent(projectId)}`,
+  );
+  const body = await readApiResponse<ProjectDetailsResponse>(response);
+
+  return body.project;
+}
+
+async function createProjectRequest(
+  workspaceId: string,
+  name: string,
+  description: string,
+): Promise<ProjectResponse> {
+  const response = await apiFetch(
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/projects`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ name, description }),
+    },
+  );
+  const body = await readApiResponse<ProjectDetailsResponse>(response);
+
+  return body.project;
+}
+
+async function updateProjectRequest(
+  workspaceId: string,
+  projectId: string,
+  name: string,
+  description: string,
+): Promise<ProjectResponse> {
+  const response = await apiFetch(
+    `/api/workspaces/${encodeURIComponent(
+      workspaceId,
+    )}/projects/${encodeURIComponent(projectId)}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ name, description }),
+    },
+  );
+  const body = await readApiResponse<ProjectDetailsResponse>(response);
+
+  return body.project;
+}
+
 async function createWorkspaceInvitation(
   workspaceId: string,
   email: string,
@@ -1209,6 +1677,10 @@ function formatDate(value: string): string {
     day: 'numeric',
     year: 'numeric',
   }).format(new Date(value));
+}
+
+function canManageProjects(role: WorkspaceRole): boolean {
+  return role === 'owner' || role === 'member';
 }
 
 function friendlyInvitationError(message: string): string {
