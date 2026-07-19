@@ -14,15 +14,17 @@ import { requireWorkspaceMembership } from '../workspaces/store.js';
 import type { WorkspaceRole } from '../workspaces/model.js';
 import { roleCan } from '../workspaces/permissions.js';
 import {
-  retrieveProjectDocument,
   saveProjectDocument,
   type RetrievedProjectDocument,
 } from '../documents/service.js';
 import type { ProjectDocument } from '../documents/model.js';
 import {
+  getProjectDocument,
+  isProjectDocumentSharedWithUser,
   listProjectDocuments,
   ProjectDocumentNotFoundError,
 } from '../documents/store.js';
+import { roleCanAccessDocument } from '../documents/permissions.js';
 import { S3ObjectStorage, type ObjectStorage } from '../storage/s3.js';
 import {
   roleCanCreateProject,
@@ -443,23 +445,63 @@ async function retrieveAuthorizedProjectDocument(input: {
     workspaceId,
     currentUser.currentUser.sub,
   );
-
-  await getProjectForRole(input.db, {
+  const document = await getProjectDocument(input.db, {
+    workspaceId,
+    projectId,
+    documentId: readRouteParam(input.req, 'documentId'),
+  });
+  const hasProjectAccess = await canAccessProject(input.db, {
     workspaceId,
     projectId,
     userSub: currentUser.currentUser.sub,
     role,
   });
+  const isDocumentSharedWithUser = hasProjectAccess
+    ? false
+    : await isProjectDocumentSharedWithUser(input.db, {
+        documentId: document.id,
+        userSub: currentUser.currentUser.sub,
+      });
+
+  if (
+    !roleCanAccessDocument(role, {
+      hasProjectAccess,
+      isDocumentSharedWithUser,
+    })
+  ) {
+    throw new ProjectPermissionError(
+      'Documents can only be viewed by project users or explicitly shared users',
+    );
+  }
 
   if (!input.storage) {
     throw new ProjectStorageUnavailableError();
   }
 
-  return retrieveProjectDocument(input.db, input.storage, {
-    workspaceId,
-    projectId,
-    documentId: readRouteParam(input.req, 'documentId'),
-  });
+  const file = await input.storage.getObject(document.storageKey);
+
+  return { document, file };
+}
+
+async function canAccessProject(
+  db: ProjectQueryable,
+  input: {
+    workspaceId: string;
+    projectId: string;
+    userSub: string;
+    role: WorkspaceRole;
+  },
+): Promise<boolean> {
+  try {
+    await getProjectForRole(db, input);
+    return true;
+  } catch (error) {
+    if (error instanceof ProjectPermissionError) {
+      return false;
+    }
+
+    throw error;
+  }
 }
 
 function readRouteParam(req: Request, key: string): string {

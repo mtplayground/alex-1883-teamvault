@@ -10,6 +10,15 @@ export interface ProjectDocument {
   uploadedAt: Date;
 }
 
+export interface ProjectDocumentShare {
+  documentId: string;
+  workspaceId: string;
+  projectId: string;
+  userSub: string;
+  sharedBySub: string;
+  createdAt: Date;
+}
+
 export interface NewProjectDocumentInput {
   id?: string;
   workspaceId: string;
@@ -19,6 +28,14 @@ export interface NewProjectDocumentInput {
   sizeBytes: number;
   uploaderSub: string;
   storageKey: string;
+}
+
+export interface NewProjectDocumentShareInput {
+  documentId: string;
+  workspaceId: string;
+  projectId: string;
+  userSub: string;
+  sharedBySub: string;
 }
 
 export function normalizeDocumentFileName(fileName: string): string {
