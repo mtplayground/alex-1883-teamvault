@@ -385,6 +385,7 @@ button:disabled,
 
 .member-list,
 .pending-list,
+.document-grid,
 .project-grid,
 .project-form {
   display: grid;
@@ -463,6 +464,11 @@ button:disabled,
   gap: 14px;
 }
 
+.document-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
 .project-card {
   min-height: 132px;
   display: grid;
@@ -488,8 +494,74 @@ button:disabled,
   line-height: 1.5;
 }
 
+.document-card {
+  min-height: 188px;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 18px;
+  border: 1px solid #e1e6ec;
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.document-card h3 {
+  margin: 0;
+  color: #17202a;
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.document-card p {
+  margin: 0;
+  color: #667586;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.document-card-topline,
+.document-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.document-card-topline {
+  justify-content: space-between;
+  color: #667586;
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.document-type {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: #e8f0fe;
+  color: #1f4f9d;
+}
+
+.document-actions {
+  margin-top: 4px;
+}
+
 .project-form {
   grid-template-columns: minmax(220px, 1fr);
+}
+
+.selected-file {
+  margin: 0;
+  color: #25313f;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.upload-progress {
+  width: 100%;
+  height: 12px;
 }
 
 .notice {
@@ -567,7 +639,8 @@ select:focus {
   border-color: #1f6feb;
 }
 
-input[aria-invalid='true'] {
+input[aria-invalid='true'],
+textarea[aria-invalid='true'] {
   border-color: #a33b2f;
 }
 
@@ -611,6 +684,7 @@ input[aria-invalid='true'] {
   .hero-grid,
   .dashboard-grid,
   .invite-form,
+  .document-grid,
   .project-grid {
     grid-template-columns: 1fr;
   }

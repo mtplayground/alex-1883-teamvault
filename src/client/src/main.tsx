@@ -77,6 +77,21 @@ interface ProjectDetailsResponse {
   project: ProjectResponse;
 }
 
+interface ProjectDocumentResponse {
+  id: string;
+  workspaceId: string;
+  projectId: string;
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+  uploaderSub: string;
+  uploadedAt: string;
+}
+
+interface ProjectDocumentListResponse {
+  documents: ProjectDocumentResponse[];
+}
+
 interface ProjectFormValues {
   name: string;
   description: string;
@@ -90,6 +105,14 @@ interface ProjectFormErrors {
 const activeWorkspaceStorageKey = 'active-workspace-id';
 const projectNameMaxLength = 120;
 const projectDescriptionMaxLength = 1000;
+const maxDocumentUploadBytes = 10 * 1024 * 1024;
+const acceptedDocumentContentTypes = new Set([
+  'application/pdf',
+  'image/gif',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+]);
 
 function App() {
   const path = window.location.pathname;
@@ -1203,10 +1226,19 @@ function ProjectDetailScreen({ projectId }: { projectId: string }) {
     null,
   );
   const [project, setProject] = useState<ProjectResponse | null>(null);
+  const [documents, setDocuments] = useState<ProjectDocumentResponse[]>([]);
   const [projectName, setProjectName] = useState('');
   const [projectDescription, setProjectDescription] = useState('');
   const [formErrors, setFormErrors] = useState<ProjectFormErrors>({});
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [status, setStatus] = useState<
+    | { type: 'idle'; message: string | null }
+    | { type: 'loading'; message: string }
+    | { type: 'success'; message: string }
+    | { type: 'error'; message: string }
+  >({ type: 'idle', message: null });
+  const [uploadStatus, setUploadStatus] = useState<
     | { type: 'idle'; message: string | null }
     | { type: 'loading'; message: string }
     | { type: 'success'; message: string }
@@ -1228,13 +1260,16 @@ function ProjectDetailScreen({ projectId }: { projectId: string }) {
       setStatus({ type: 'loading', message: 'Loading project.' });
 
       try {
-        const [workspaceDetails, projectDetails] = await Promise.all([
-          fetchWorkspaceDetails(workspaceId),
-          fetchProjectDetails(workspaceId, projectId),
-        ]);
+        const [workspaceDetails, projectDetails, projectDocuments] =
+          await Promise.all([
+            fetchWorkspaceDetails(workspaceId),
+            fetchProjectDetails(workspaceId, projectId),
+            fetchProjectDocuments(workspaceId, projectId),
+          ]);
 
         setWorkspace(workspaceDetails);
         setProject(projectDetails);
+        setDocuments(projectDocuments);
         setProjectName(projectDetails.name);
         setProjectDescription(projectDetails.description ?? '');
         setStatus({ type: 'idle', message: null });
@@ -1292,6 +1327,46 @@ function ProjectDetailScreen({ projectId }: { projectId: string }) {
         type: 'error',
         message:
           error instanceof Error ? error.message : 'Unable to save project.',
+      });
+    }
+  }
+
+  async function submitDocumentUpload(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!workspace || !project || !canManage) {
+      return;
+    }
+
+    const file = selectedFile;
+    const validationError = validateDocumentUploadFile(file);
+    if (validationError) {
+      setUploadStatus({ type: 'error', message: validationError });
+      setUploadProgress(0);
+      return;
+    }
+
+    setUploadProgress(0);
+    setUploadStatus({ type: 'loading', message: 'Uploading document.' });
+
+    try {
+      const document = await uploadProjectDocumentRequest(
+        workspace.workspace.id,
+        project.id,
+        file,
+        setUploadProgress,
+      );
+
+      setDocuments((currentDocuments) => [document, ...currentDocuments]);
+      setSelectedFile(null);
+      setUploadProgress(100);
+      setUploadStatus({ type: 'success', message: 'Document uploaded.' });
+      event.currentTarget.reset();
+    } catch (error) {
+      setUploadStatus({
+        type: 'error',
+        message:
+          error instanceof Error ? error.message : 'Unable to upload document.',
       });
     }
   }
@@ -1355,6 +1430,126 @@ function ProjectDetailScreen({ projectId }: { projectId: string }) {
           </div>
           <p>{project.description ?? 'No description has been added.'}</p>
           <p>Updated {formatDate(project.updatedAt)}</p>
+        </section>
+      ) : null}
+
+      {project && canManage ? (
+        <section className="workspace-panel" aria-labelledby="upload-document">
+          <div>
+            <p className="eyebrow">Upload</p>
+            <h2 id="upload-document">Add images and PDFs.</h2>
+          </div>
+          <form className="project-form" onSubmit={submitDocumentUpload}>
+            <label htmlFor="project-document">Document file</label>
+            <input
+              id="project-document"
+              type="file"
+              accept="application/pdf,image/gif,image/jpeg,image/png,image/webp"
+              aria-describedby="project-document-hint"
+              onChange={(event) => {
+                const file = event.target.files?.[0] ?? null;
+                setSelectedFile(file);
+                setUploadProgress(0);
+                setUploadStatus({ type: 'idle', message: null });
+              }}
+            />
+            <p className="field-hint" id="project-document-hint">
+              PDF, PNG, JPEG, GIF, or WebP. Up to{' '}
+              {formatBytes(maxDocumentUploadBytes)}.
+            </p>
+            {selectedFile ? (
+              <p className="selected-file">
+                {selectedFile.name} - {formatBytes(selectedFile.size)}
+              </p>
+            ) : null}
+            {uploadStatus.type !== 'idle' || uploadStatus.message ? (
+              <p
+                className={
+                  uploadStatus.type === 'error'
+                    ? 'inline-alert dashboard-alert'
+                    : uploadStatus.type === 'success'
+                      ? 'notice success-notice'
+                      : 'notice'
+                }
+              >
+                {uploadStatus.message}
+              </p>
+            ) : null}
+            {uploadStatus.type === 'loading' ? (
+              <progress
+                className="upload-progress"
+                max="100"
+                value={uploadProgress}
+              >
+                {uploadProgress}%
+              </progress>
+            ) : null}
+            <button
+              className="button primary-button"
+              type="submit"
+              disabled={uploadStatus.type === 'loading'}
+            >
+              Upload document
+            </button>
+          </form>
+        </section>
+      ) : null}
+
+      {project ? (
+        <section
+          className="workspace-panel"
+          aria-labelledby="project-documents"
+        >
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">Documents</p>
+              <h2 id="project-documents">Project documents</h2>
+            </div>
+            <span className="role-pill">{documents.length}</span>
+          </div>
+          {documents.length === 0 ? (
+            <p>No documents have been uploaded to this project.</p>
+          ) : (
+            <div className="document-grid">
+              {documents.map((document) => (
+                <article className="document-card" key={document.id}>
+                  <div className="document-card-topline">
+                    <span className="document-type">
+                      {documentTypeLabel(document.contentType)}
+                    </span>
+                    <span>{formatBytes(document.sizeBytes)}</span>
+                  </div>
+                  <h3>{document.fileName}</h3>
+                  <p>Uploaded by {document.uploaderSub}</p>
+                  <p>{formatDate(document.uploadedAt)}</p>
+                  <div className="document-actions">
+                    <a
+                      className="button secondary-button compact-button"
+                      href={projectDocumentUrl(
+                        document.workspaceId,
+                        document.projectId,
+                        document.id,
+                      )}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      View
+                    </a>
+                    <a
+                      className="button secondary-button compact-button"
+                      href={`${projectDocumentUrl(
+                        document.workspaceId,
+                        document.projectId,
+                        document.id,
+                      )}/download`}
+                    >
+                      Download
+                    </a>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
         </section>
       ) : null}
 
@@ -1635,6 +1830,76 @@ async function fetchProjectDetails(
   return body.project;
 }
 
+async function fetchProjectDocuments(
+  workspaceId: string,
+  projectId: string,
+): Promise<ProjectDocumentResponse[]> {
+  const response = await apiFetch(
+    `/api/workspaces/${encodeURIComponent(
+      workspaceId,
+    )}/projects/${encodeURIComponent(projectId)}/documents`,
+  );
+  const body = await readApiResponse<ProjectDocumentListResponse>(response);
+
+  return body.documents;
+}
+
+async function uploadProjectDocumentRequest(
+  workspaceId: string,
+  projectId: string,
+  file: File | null,
+  onProgress: (progress: number) => void,
+): Promise<ProjectDocumentResponse> {
+  if (!file) {
+    throw new Error('Choose a document to upload.');
+  }
+
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+
+    xhr.open(
+      'POST',
+      `/api/workspaces/${encodeURIComponent(
+        workspaceId,
+      )}/projects/${encodeURIComponent(projectId)}/documents`,
+    );
+    xhr.withCredentials = true;
+    xhr.setRequestHeader('Content-Type', file.type);
+    xhr.setRequestHeader('X-File-Name', file.name);
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        onProgress(Math.round((event.loaded / event.total) * 100));
+      }
+    };
+    xhr.onerror = () => reject(new Error('Unable to upload document.'));
+    xhr.onload = () => {
+      const body = parseJsonResponse(xhr.responseText) as {
+        document?: ProjectDocumentResponse;
+        error?: unknown;
+      } | null;
+
+      if (xhr.status < 200 || xhr.status >= 300) {
+        reject(
+          new Error(
+            typeof body?.error === 'string'
+              ? body.error
+              : `Upload failed with ${xhr.status}`,
+          ),
+        );
+        return;
+      }
+
+      if (!body?.document) {
+        reject(new Error('Upload response was missing the document.'));
+        return;
+      }
+
+      resolve(body.document);
+    };
+    xhr.send(file);
+  });
+}
+
 async function createProjectRequest(
   workspaceId: string,
   name: string,
@@ -1818,12 +2083,83 @@ function validateProjectForm(values: ProjectFormValues):
   return { ok: true, values: { name, description } };
 }
 
+function validateDocumentUploadFile(file: File | null): string | null {
+  if (!file) {
+    return 'Choose a document to upload.';
+  }
+
+  if (!acceptedDocumentContentTypes.has(file.type)) {
+    return 'Upload a PDF, PNG, JPEG, GIF, or WebP file.';
+  }
+
+  if (file.size <= 0) {
+    return 'Upload a non-empty file.';
+  }
+
+  if (file.size > maxDocumentUploadBytes) {
+    return `Document must be ${formatBytes(maxDocumentUploadBytes)} or smaller.`;
+  }
+
+  return null;
+}
+
 function formatDate(value: string): string {
   return new Intl.DateTimeFormat(undefined, {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
   }).format(new Date(value));
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) {
+    return `${value} B`;
+  }
+
+  const units = ['KB', 'MB', 'GB'];
+  let amount = value / 1024;
+  let unitIndex = 0;
+
+  while (amount >= 1024 && unitIndex < units.length - 1) {
+    amount /= 1024;
+    unitIndex += 1;
+  }
+
+  return `${amount >= 10 ? amount.toFixed(0) : amount.toFixed(1)} ${
+    units[unitIndex]
+  }`;
+}
+
+function documentTypeLabel(contentType: string): string {
+  if (contentType === 'application/pdf') {
+    return 'PDF';
+  }
+
+  if (contentType.startsWith('image/')) {
+    return contentType.replace('image/', '').toUpperCase();
+  }
+
+  return 'File';
+}
+
+function projectDocumentUrl(
+  workspaceId: string,
+  projectId: string,
+  documentId: string,
+): string {
+  return `/api/workspaces/${encodeURIComponent(
+    workspaceId,
+  )}/projects/${encodeURIComponent(projectId)}/documents/${encodeURIComponent(
+    documentId,
+  )}`;
+}
+
+function parseJsonResponse(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
 }
 
 function canManageProjects(role: WorkspaceRole): boolean {
