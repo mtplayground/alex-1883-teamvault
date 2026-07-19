@@ -1,7 +1,12 @@
 import { StrictMode, useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
-import type { AuthSessionResponse, CurrentUser } from '../../shared/auth';
+import type {
+  AuthSessionResponse,
+  CurrentUser,
+  PasswordResetCompleteResponse,
+  PasswordResetRequestResponse,
+} from '../../shared/auth';
 
 import './styles.css';
 
@@ -16,8 +21,20 @@ type VerificationStatus = 'success' | 'expired' | 'unknown';
 function App() {
   const path = window.location.pathname;
 
+  if (path === '/login') {
+    return <LoginScreen />;
+  }
+
   if (path === '/signup') {
     return <SignUpScreen />;
+  }
+
+  if (path === '/forgot-password') {
+    return <ForgotPasswordScreen />;
+  }
+
+  if (path === '/reset-password') {
+    return <ResetPasswordScreen />;
   }
 
   if (path === '/signup/check-email') {
@@ -59,7 +76,7 @@ function HomeScreen() {
             the right people, and keep important project activity in one place.
           </p>
           <div className="button-row">
-            <a className="button primary-button" href="/api/auth/login">
+            <a className="button primary-button" href="/login">
               Sign in
             </a>
             <a className="button secondary-button" href="/signup">
@@ -71,6 +88,54 @@ function HomeScreen() {
           ) : null}
         </div>
         <DocumentPreview />
+      </section>
+    </main>
+  );
+}
+
+function LoginScreen() {
+  const errorMessage = useMemo(() => {
+    const error = new URLSearchParams(window.location.search).get('error');
+
+    if (error === 'credentials') {
+      return 'The secure sign-in service could not confirm those credentials.';
+    }
+
+    if (error === 'unverified') {
+      return 'Verify your email address before continuing.';
+    }
+
+    if (error === 'expired') {
+      return 'Your sign-in link expired. Start sign-in again.';
+    }
+
+    return null;
+  }, []);
+
+  return (
+    <main className="app-shell centered-shell">
+      <section className="form-panel" aria-labelledby="login-title">
+        <p className="eyebrow">Sign in</p>
+        <h1 id="login-title">Continue securely.</h1>
+        <p className="summary compact-summary">
+          Sign in through the secure authentication service to open your
+          document workspace.
+        </p>
+        {errorMessage ? <p className="inline-alert">{errorMessage}</p> : null}
+        <div className="form-actions">
+          <a
+            className="button primary-button full-button"
+            href="/api/auth/login"
+          >
+            Continue sign-in
+          </a>
+          <a className="button secondary-button full-button" href="/signup">
+            Create account
+          </a>
+        </div>
+        <p className="supporting-link">
+          Need account recovery? <a href="/forgot-password">Forgot password</a>
+        </p>
       </section>
     </main>
   );
@@ -164,7 +229,7 @@ function SignUpScreen() {
           </button>
         </form>
         <p className="supporting-link">
-          Already have access? <a href="/api/auth/login">Sign in</a>
+          Already have access? <a href="/login">Sign in</a>
         </p>
       </section>
     </main>
@@ -180,7 +245,7 @@ function CheckEmailScreen() {
           send a message with the next step.
         </p>
         <div className="button-row">
-          <a className="button primary-button" href="/api/auth/login">
+          <a className="button primary-button" href="/login">
             Continue sign-in
           </a>
           <a className="button secondary-button" href="/">
@@ -205,7 +270,7 @@ function VerificationResultScreen() {
       <main className="app-shell centered-shell">
         <StatusPanel title="Email verified" tone="success">
           <p>Your email address is verified. Continue to your workspace.</p>
-          <a className="button primary-button" href="/api/auth/login">
+          <a className="button primary-button" href="/login">
             Continue
           </a>
         </StatusPanel>
@@ -239,6 +304,190 @@ function VerificationResultScreen() {
         <a className="button primary-button" href="/api/auth/login">
           Continue sign-in
         </a>
+      </StatusPanel>
+    </main>
+  );
+}
+
+function ForgotPasswordScreen() {
+  const [email, setEmail] = useState('');
+  const [status, setStatus] = useState<
+    | { type: 'idle'; error: string | null }
+    | { type: 'submitting'; error: null }
+    | { type: 'sent'; message: string }
+  >({ type: 'idle', error: null });
+
+  async function submitRequest(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const normalizedEmail = email.trim();
+
+    if (!isValidEmail(normalizedEmail)) {
+      setStatus({ type: 'idle', error: 'Enter a valid email address.' });
+      return;
+    }
+
+    setStatus({ type: 'submitting', error: null });
+
+    try {
+      const response = await fetch('/api/auth/password-reset/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: normalizedEmail }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Recovery request failed with ${response.status}`);
+      }
+
+      const body = (await response.json()) as PasswordResetRequestResponse;
+      setStatus({ type: 'sent', message: body.message });
+    } catch (error) {
+      setStatus({
+        type: 'idle',
+        error:
+          error instanceof Error
+            ? error.message
+            : 'Unable to start account recovery.',
+      });
+    }
+  }
+
+  if (status.type === 'sent') {
+    return (
+      <main className="app-shell centered-shell">
+        <StatusPanel title="Check your sign-in options" tone="neutral">
+          <p>{status.message}</p>
+          <div className="button-row">
+            <a className="button primary-button" href="/login">
+              Continue sign-in
+            </a>
+            <a className="button secondary-button" href="/">
+              Back home
+            </a>
+          </div>
+        </StatusPanel>
+      </main>
+    );
+  }
+
+  return (
+    <main className="app-shell centered-shell">
+      <section className="form-panel" aria-labelledby="forgot-title">
+        <p className="eyebrow">Account recovery</p>
+        <h1 id="forgot-title">Recover access.</h1>
+        <p className="summary compact-summary">
+          Enter your email and continue through the secure sign-in service. The
+          response is the same whether an email is registered or not.
+        </p>
+        <form onSubmit={submitRequest} noValidate>
+          <label htmlFor="recovery-email">Email address</label>
+          <input
+            id="recovery-email"
+            name="email"
+            type="email"
+            autoComplete="email"
+            value={email}
+            aria-invalid={
+              status.type === 'idle' && status.error ? 'true' : 'false'
+            }
+            onChange={(event) => setEmail(event.target.value)}
+            placeholder="you@example.com"
+          />
+          {status.type === 'idle' && status.error ? (
+            <p className="field-error">{status.error}</p>
+          ) : null}
+          <button
+            className="button primary-button full-button"
+            type="submit"
+            disabled={status.type === 'submitting'}
+          >
+            {status.type === 'submitting' ? 'Sending...' : 'Continue recovery'}
+          </button>
+        </form>
+        <p className="supporting-link">
+          Remembered access? <a href="/login">Sign in</a>
+        </p>
+      </section>
+    </main>
+  );
+}
+
+function ResetPasswordScreen() {
+  const [status, setStatus] = useState<
+    | { type: 'ready' }
+    | { type: 'submitting' }
+    | { type: 'error'; message: string }
+  >({ type: 'ready' });
+  const expired = useMemo(
+    () =>
+      new URLSearchParams(window.location.search).get('status') === 'expired',
+    [],
+  );
+
+  async function continueRecovery() {
+    setStatus({ type: 'submitting' });
+
+    try {
+      const response = await fetch('/api/auth/password-reset/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: new URLSearchParams(window.location.search).get('token'),
+        }),
+      });
+      const body = (await response.json()) as PasswordResetCompleteResponse;
+
+      if (body.loginUrl) {
+        window.location.assign(body.loginUrl);
+        return;
+      }
+
+      throw new Error(`Recovery link failed with ${response.status}`);
+    } catch (error) {
+      setStatus({
+        type: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Unable to continue account recovery.',
+      });
+    }
+  }
+
+  if (expired) {
+    return (
+      <main className="app-shell centered-shell">
+        <StatusPanel title="Reset link expired" tone="warning">
+          <p>
+            This recovery link is no longer active. Start recovery again to
+            continue through the secure sign-in service.
+          </p>
+          <a className="button primary-button" href="/forgot-password">
+            Request a new link
+          </a>
+        </StatusPanel>
+      </main>
+    );
+  }
+
+  return (
+    <main className="app-shell centered-shell">
+      <StatusPanel title="Continue account recovery" tone="neutral">
+        <p>
+          Password recovery is completed by the secure authentication service.
+          Continue there to finish safely.
+        </p>
+        {status.type === 'error' ? (
+          <p className="inline-alert">{status.message}</p>
+        ) : null}
+        <button
+          className="button primary-button"
+          type="button"
+          onClick={continueRecovery}
+          disabled={status.type === 'submitting'}
+        >
+          {status.type === 'submitting' ? 'Opening...' : 'Continue recovery'}
+        </button>
       </StatusPanel>
     </main>
   );
