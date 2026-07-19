@@ -1,4 +1,4 @@
-import { StrictMode, useMemo, useState } from 'react';
+import { StrictMode, useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import type {
@@ -13,6 +13,43 @@ import { AuthProvider, useAuth, type AuthState } from './auth';
 import './styles.css';
 
 type VerificationStatus = 'success' | 'expired' | 'unknown';
+type WorkspaceRole = 'owner' | 'member' | 'guest';
+
+interface WorkspaceDetailsResponse {
+  workspace: {
+    id: string;
+    name: string;
+    createdBySub: string;
+    createdAt: string;
+    updatedAt: string;
+  };
+  members: Array<{
+    workspaceId: string;
+    userSub: string;
+    role: WorkspaceRole;
+    createdAt: string;
+    updatedAt: string;
+  }>;
+}
+
+interface WorkspaceInvitationResponse {
+  id: string;
+  workspaceId: string;
+  email: string;
+  role: Exclude<WorkspaceRole, 'owner'>;
+  invitedBySub: string;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
+  acceptedAt: string | null;
+  revokedAt: string | null;
+}
+
+interface PendingInvitationsResponse {
+  invitations: WorkspaceInvitationResponse[];
+}
+
+const activeWorkspaceStorageKey = 'active-workspace-id';
 
 function App() {
   const path = window.location.pathname;
@@ -188,6 +225,169 @@ function LoginScreen() {
 function DashboardScreen() {
   const { state, signOut } = useAuth();
   const session = signedInSession(state);
+  const [workspace, setWorkspace] = useState<WorkspaceDetailsResponse | null>(
+    null,
+  );
+  const [pendingInvitations, setPendingInvitations] = useState<
+    WorkspaceInvitationResponse[]
+  >([]);
+  const [workspaceName, setWorkspaceName] = useState('');
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteRole, setInviteRole] =
+    useState<WorkspaceInvitationResponse['role']>('member');
+  const [status, setStatus] = useState<
+    | { type: 'idle'; message: string | null }
+    | { type: 'loading'; message: string }
+    | { type: 'error'; message: string }
+  >({ type: 'idle', message: null });
+
+  const currentUserSub = session?.user.sub;
+  const currentMembership =
+    workspace?.members.find((member) => member.userSub === currentUserSub) ??
+    null;
+  const isOwner = currentMembership?.role === 'owner';
+
+  async function loadWorkspace(workspaceId: string) {
+    if (!currentUserSub) {
+      return;
+    }
+
+    setStatus({ type: 'loading', message: 'Loading workspace.' });
+
+    try {
+      const details = await fetchWorkspaceDetails(workspaceId);
+      const role =
+        details.members.find((member) => member.userSub === currentUserSub)
+          ?.role ?? null;
+      const invitations =
+        role === 'owner' ? await fetchPendingInvitations(workspaceId) : [];
+
+      setWorkspace(details);
+      setPendingInvitations(invitations);
+      window.localStorage.setItem(
+        activeWorkspaceStorageKey,
+        details.workspace.id,
+      );
+      setStatus({ type: 'idle', message: 'Workspace loaded.' });
+    } catch (error) {
+      window.localStorage.removeItem(activeWorkspaceStorageKey);
+      setWorkspace(null);
+      setPendingInvitations([]);
+      setStatus({
+        type: 'error',
+        message:
+          error instanceof Error ? error.message : 'Unable to load workspace.',
+      });
+    }
+  }
+
+  useEffect(() => {
+    if (!currentUserSub) {
+      return;
+    }
+
+    const workspaceId = window.localStorage.getItem(activeWorkspaceStorageKey);
+
+    if (workspaceId && !workspace && status.type === 'idle') {
+      void loadWorkspace(workspaceId);
+    }
+  }, [currentUserSub]);
+
+  async function submitWorkspace(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const name = workspaceName.trim();
+
+    if (name.length === 0) {
+      setStatus({ type: 'error', message: 'Workspace name is required.' });
+      return;
+    }
+
+    setStatus({ type: 'loading', message: 'Creating workspace.' });
+
+    try {
+      const details = await createWorkspaceRequest(name);
+      setWorkspace(details);
+      setPendingInvitations([]);
+      setWorkspaceName('');
+      window.localStorage.setItem(
+        activeWorkspaceStorageKey,
+        details.workspace.id,
+      );
+      setStatus({ type: 'idle', message: 'Workspace created.' });
+    } catch (error) {
+      setStatus({
+        type: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Unable to create workspace.',
+      });
+    }
+  }
+
+  async function submitInvitation(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!workspace || !isOwner) {
+      return;
+    }
+
+    const email = inviteEmail.trim();
+    if (!isValidEmail(email)) {
+      setStatus({ type: 'error', message: 'Enter a valid invite email.' });
+      return;
+    }
+
+    setStatus({ type: 'loading', message: 'Sending invitation.' });
+
+    try {
+      await createWorkspaceInvitation(
+        workspace.workspace.id,
+        email,
+        inviteRole,
+      );
+      setPendingInvitations(
+        await fetchPendingInvitations(workspace.workspace.id),
+      );
+      setInviteEmail('');
+      setInviteRole('member');
+      setStatus({ type: 'idle', message: 'Invitation sent.' });
+    } catch (error) {
+      setStatus({
+        type: 'error',
+        message:
+          error instanceof Error ? error.message : 'Unable to send invitation.',
+      });
+    }
+  }
+
+  async function revokeInvitation(invitationId: string) {
+    if (!workspace || !isOwner) {
+      return;
+    }
+
+    setStatus({ type: 'loading', message: 'Revoking invitation.' });
+
+    try {
+      await revokeWorkspaceInvitation(workspace.workspace.id, invitationId);
+      setPendingInvitations((invitations) =>
+        invitations.filter((invitation) => invitation.id !== invitationId),
+      );
+      setStatus({ type: 'idle', message: 'Invitation revoked.' });
+    } catch (error) {
+      setStatus({
+        type: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Unable to revoke invitation.',
+      });
+    }
+  }
+
+  const workspaceCount = workspace ? 1 : 0;
+  const memberCount = workspace?.members.length ?? 0;
+  const pendingCount = isOwner ? pendingInvitations.length : 0;
 
   if (!session) {
     return null;
@@ -198,7 +398,7 @@ function DashboardScreen() {
       <header className="topbar">
         <div>
           <p className="eyebrow">Signed in</p>
-          <h1>Document workspace</h1>
+          <h1>{workspace ? workspace.workspace.name : 'Workspace setup'}</h1>
         </div>
         <div className="topbar-actions">
           <UserBadge user={session.user} />
@@ -216,33 +416,166 @@ function DashboardScreen() {
 
       <section className="dashboard-grid" aria-label="Workspace overview">
         <article className="metric-panel">
-          <span className="metric-value">0</span>
+          <span className="metric-value">{workspaceCount}</span>
           <h2>Workspaces</h2>
-          <p>Create a workspace to organize teams, projects, and documents.</p>
+          <p>
+            {workspace
+              ? 'Your active workspace is ready.'
+              : 'Create a workspace to organize teams, projects, and documents.'}
+          </p>
         </article>
         <article className="metric-panel">
-          <span className="metric-value">0</span>
-          <h2>Projects</h2>
-          <p>Projects will appear here once workspace setup is complete.</p>
+          <span className="metric-value">{memberCount}</span>
+          <h2>Members</h2>
+          <p>
+            {workspace
+              ? 'Current workspace access is shown below.'
+              : 'Members appear after workspace setup.'}
+          </p>
         </article>
         <article className="metric-panel">
-          <span className="metric-value">0</span>
-          <h2>Shared documents</h2>
-          <p>Documents shared with you will be listed in this view.</p>
+          <span className="metric-value">{pendingCount}</span>
+          <h2>Pending invites</h2>
+          <p>
+            {isOwner
+              ? 'Invitations waiting for a response.'
+              : 'Only owners manage invitations.'}
+          </p>
         </article>
       </section>
 
-      <section className="activity-panel" aria-labelledby="activity-title">
-        <div>
-          <h2 id="activity-title">
-            {session.isNew ? 'Registration complete.' : session.message}
-          </h2>
-          <p>
-            Your secure session is active. Workspace and document tools will
-            unlock as the next product areas are added.
-          </p>
-        </div>
-      </section>
+      {status.type !== 'idle' || status.message ? (
+        <p
+          className={
+            status.type === 'error' ? 'inline-alert dashboard-alert' : 'notice'
+          }
+        >
+          {status.message}
+        </p>
+      ) : null}
+
+      {!workspace ? (
+        <section className="workspace-panel" aria-labelledby="setup-title">
+          <div>
+            <p className="eyebrow">Workspace setup</p>
+            <h2 id="setup-title">Create the first workspace.</h2>
+            <p>
+              Workspaces group members, projects, and shared documents under one
+              access boundary.
+            </p>
+          </div>
+          <form className="inline-form" onSubmit={submitWorkspace}>
+            <label htmlFor="workspace-name">Workspace name</label>
+            <div className="form-row">
+              <input
+                id="workspace-name"
+                value={workspaceName}
+                onChange={(event) => setWorkspaceName(event.target.value)}
+                placeholder="Client files"
+              />
+              <button
+                className="button primary-button"
+                type="submit"
+                disabled={status.type === 'loading'}
+              >
+                Create
+              </button>
+            </div>
+          </form>
+        </section>
+      ) : (
+        <>
+          <section className="workspace-panel" aria-labelledby="members-title">
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">Members</p>
+                <h2 id="members-title">Workspace access</h2>
+              </div>
+              {currentMembership ? (
+                <span className="role-pill">{currentMembership.role}</span>
+              ) : null}
+            </div>
+            <div className="member-list">
+              {workspace.members.map((member) => (
+                <div className="member-row" key={member.userSub}>
+                  <div>
+                    <strong>{member.userSub}</strong>
+                    <span>Added {formatDate(member.createdAt)}</span>
+                  </div>
+                  <span className="role-pill">{member.role}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {isOwner ? (
+            <section className="workspace-panel" aria-labelledby="invite-title">
+              <div>
+                <p className="eyebrow">Invitations</p>
+                <h2 id="invite-title">Invite by email</h2>
+              </div>
+              <form className="invite-form" onSubmit={submitInvitation}>
+                <label htmlFor="invite-email">Email address</label>
+                <input
+                  id="invite-email"
+                  type="email"
+                  value={inviteEmail}
+                  onChange={(event) => setInviteEmail(event.target.value)}
+                  placeholder="teammate@example.com"
+                />
+                <label htmlFor="invite-role">Role</label>
+                <select
+                  id="invite-role"
+                  value={inviteRole}
+                  onChange={(event) =>
+                    setInviteRole(
+                      event.target.value as WorkspaceInvitationResponse['role'],
+                    )
+                  }
+                >
+                  <option value="member">Member</option>
+                  <option value="guest">Guest</option>
+                </select>
+                <button
+                  className="button primary-button"
+                  type="submit"
+                  disabled={status.type === 'loading'}
+                >
+                  Send invite
+                </button>
+              </form>
+
+              <div className="pending-list" aria-label="Pending invitations">
+                {pendingInvitations.length === 0 ? (
+                  <p>No pending invitations.</p>
+                ) : (
+                  pendingInvitations.map((invitation) => (
+                    <div className="member-row" key={invitation.id}>
+                      <div>
+                        <strong>{invitation.email}</strong>
+                        <span>
+                          {invitation.role} · expires{' '}
+                          {formatDate(invitation.expiresAt)}
+                        </span>
+                      </div>
+                      <button
+                        className="button secondary-button compact-button"
+                        type="button"
+                        onClick={() => {
+                          void revokeInvitation(invitation.id);
+                        }}
+                        disabled={status.type === 'loading'}
+                      >
+                        Revoke
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </section>
+          ) : null}
+        </>
+      )}
     </main>
   );
 }
@@ -553,6 +886,86 @@ function ResetPasswordScreen() {
   );
 }
 
+async function createWorkspaceRequest(
+  name: string,
+): Promise<WorkspaceDetailsResponse> {
+  const response = await apiFetch('/api/workspaces', {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  });
+
+  return readApiResponse<WorkspaceDetailsResponse>(response);
+}
+
+async function fetchWorkspaceDetails(
+  workspaceId: string,
+): Promise<WorkspaceDetailsResponse> {
+  const response = await apiFetch(
+    `/api/workspaces/${encodeURIComponent(workspaceId)}`,
+  );
+
+  return readApiResponse<WorkspaceDetailsResponse>(response);
+}
+
+async function fetchPendingInvitations(
+  workspaceId: string,
+): Promise<WorkspaceInvitationResponse[]> {
+  const response = await apiFetch(
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/invitations`,
+  );
+  const body = await readApiResponse<PendingInvitationsResponse>(response);
+
+  return body.invitations;
+}
+
+async function createWorkspaceInvitation(
+  workspaceId: string,
+  email: string,
+  role: WorkspaceInvitationResponse['role'],
+): Promise<void> {
+  const response = await apiFetch(
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/invitations`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ email, role }),
+    },
+  );
+
+  await readApiResponse<unknown>(response);
+}
+
+async function revokeWorkspaceInvitation(
+  workspaceId: string,
+  invitationId: string,
+): Promise<void> {
+  const response = await apiFetch(
+    `/api/workspaces/${encodeURIComponent(
+      workspaceId,
+    )}/invitations/${encodeURIComponent(invitationId)}`,
+    {
+      method: 'DELETE',
+    },
+  );
+
+  await readApiResponse<unknown>(response);
+}
+
+async function readApiResponse<T>(response: Response): Promise<T> {
+  const body = (await response.json().catch(() => null)) as {
+    error?: unknown;
+  } | null;
+
+  if (!response.ok) {
+    throw new Error(
+      typeof body?.error === 'string'
+        ? body.error
+        : `Request failed with ${response.status}`,
+    );
+  }
+
+  return body as T;
+}
+
 function StatusPanel({
   title,
   tone,
@@ -611,6 +1024,14 @@ function DocumentPreview() {
 
 function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function formatDate(value: string): string {
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(new Date(value));
 }
 
 function initialFor(user: CurrentUser): string {
