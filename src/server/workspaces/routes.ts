@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 
 import type { AuthConfig, EmailConfig } from '../config.js';
+import { recordActivity } from '../activity/store.js';
 import { requireAuth, type AuthenticatedLocals } from '../auth/middleware.js';
 import { getPool } from '../db/pool.js';
 import {
@@ -64,6 +65,15 @@ export function createWorkspaceRouter({
         name: readBodyString(req, 'name'),
         createdBySub: currentUserSub(res),
       });
+      await recordActivity(db, {
+        actorSub: currentUserSub(res),
+        action: 'user_joined',
+        workspaceId: workspace.id,
+        metadata: {
+          role: 'owner',
+          source: 'workspace_created',
+        },
+      });
       const details = await getWorkspaceDetails(db, workspace.id);
 
       res.status(201).json(workspaceDetailsResponse(details));
@@ -79,6 +89,15 @@ export function createWorkspaceRouter({
         token: readBodyString(req, 'token'),
         userSub: currentUser.sub,
         userEmail: currentUser.email,
+      });
+      await recordActivity(db, {
+        actorSub: currentUser.sub,
+        action: 'invitation_accepted',
+        workspaceId: result.membership.workspaceId,
+        metadata: {
+          invitationId: result.invitation.id,
+          role: result.membership.role,
+        },
       });
 
       res.json({
@@ -126,6 +145,17 @@ export function createWorkspaceRouter({
         subject: template.subject,
         html: template.html,
         text: template.text,
+      });
+      await recordActivity(db, {
+        actorSub: currentUser.currentUser.sub,
+        action: 'invitation_sent',
+        workspaceId,
+        metadata: {
+          invitationId: invitationResult.invitation.id,
+          email: invitationResult.invitation.email,
+          role: invitationResult.invitation.role,
+          emailStatus: email.status,
+        },
       });
 
       res.status(201).json({

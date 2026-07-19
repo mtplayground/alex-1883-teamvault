@@ -25,7 +25,12 @@ const verifier: MctaiJwtVerifier = async () => ({
 });
 
 test('member can create a project in a workspace', async () => {
-  const db = routeDb([userRow(), roleRow('member'), projectRows()]);
+  const db = routeDb([
+    userRow(),
+    roleRow('member'),
+    projectRows(),
+    activityRows('project_created'),
+  ]);
   const response = await withProjectServer(db, (baseUrl) =>
     fetch(`${baseUrl}/api/workspaces/workspace-1/projects`, {
       method: 'POST',
@@ -44,6 +49,7 @@ test('member can create a project in a workspace', async () => {
   assert.deepEqual(await response.json(), {
     project: projectResponse(),
   });
+  assertActivity(db, 'project_created');
 });
 
 test('guest cannot update a project', async () => {
@@ -67,6 +73,7 @@ test('guest cannot update a project', async () => {
 
 test('member can upload a PDF document to a project', async () => {
   const storedObjects: PutObjectInput[] = [];
+  const activityActions: unknown[] = [];
   const db: ProjectQueryable = {
     query: async <T>(sql: string, values?: readonly unknown[]) => {
       if (/from users/.test(sql) || /insert into users/.test(sql)) {
@@ -97,6 +104,11 @@ test('member can upload a PDF document to a project', async () => {
             },
           ] as T[],
         };
+      }
+
+      if (/insert into activity_entries/.test(sql)) {
+        activityActions.push(values?.[1]);
+        return activityRows('document_uploaded') as { rows: T[] };
       }
 
       throw new Error(`Unexpected query: ${sql}`);
@@ -150,6 +162,7 @@ test('member can upload a PDF document to a project', async () => {
     storedObjects[0]?.key ?? '',
     /^workspaces\/workspace-1\/projects\/project-1\/documents\/.+\/Launch-Plan.pdf$/,
   );
+  assert.deepEqual(activityActions, ['document_uploaded']);
 });
 
 test('guest cannot upload documents to a project', async () => {
@@ -371,6 +384,7 @@ test('member can share a document with a workspace user and sends email', async 
     projectRows(),
     shareRecipientRows(),
     documentShareRows({ inserted: true }),
+    activityRows('document_shared'),
   ]);
   const response = await withProjectServer(
     db,
@@ -409,6 +423,7 @@ test('member can share a document with a workspace user and sends email', async 
     sentEmails[0]?.text ?? '',
     /https:\/\/vault\.example\.test\/projects\/project-1\/documents\/document-1/,
   );
+  assertActivity(db, 'document_shared');
 });
 
 test('existing document share does not send duplicate email', async () => {
@@ -661,9 +676,15 @@ async function withProjectServer(
 
 const now = new Date('2026-07-19T00:00:00.000Z');
 
-function routeDb(results: Array<{ rows: unknown[] }>): ProjectQueryable {
+function routeDb(results: Array<{ rows: unknown[] }>): ProjectQueryable & {
+  queries: Array<{ sql: string; values: readonly unknown[] }>;
+} {
+  const queries: Array<{ sql: string; values: readonly unknown[] }> = [];
+
   return {
-    query: async <T>() => {
+    queries,
+    query: async <T>(sql: string, values: readonly unknown[] = []) => {
+      queries.push({ sql, values });
       const result = results.shift();
       if (!result) {
         throw new Error('Unexpected query');
@@ -672,6 +693,18 @@ function routeDb(results: Array<{ rows: unknown[] }>): ProjectQueryable {
       return { rows: result.rows as T[] };
     },
   };
+}
+
+function assertActivity(
+  db: { queries: Array<{ sql: string; values: readonly unknown[] }> },
+  action: string,
+): void {
+  const activityQuery = db.queries.find((query) =>
+    /insert into activity_entries/.test(query.sql),
+  );
+
+  assert.ok(activityQuery, 'expected activity entry to be recorded');
+  assert.equal(activityQuery.values[1], action);
 }
 
 function userRow() {
@@ -735,6 +768,23 @@ function documentShareRows({ inserted = true }: { inserted?: boolean } = {}) {
         shared_by_sub: 'auth|123',
         created_at: now,
         inserted,
+      },
+    ],
+  };
+}
+
+function activityRows(action: string) {
+  return {
+    rows: [
+      {
+        id: 'activity-1',
+        actor_sub: 'auth|123',
+        action,
+        workspace_id: 'workspace-1',
+        project_id: action === 'user_joined' ? null : 'project-1',
+        document_id: action.startsWith('document_') ? 'document-1' : null,
+        metadata: {},
+        created_at: now,
       },
     ],
   };
