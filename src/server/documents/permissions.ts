@@ -17,3 +17,10 @@ export function roleCanAccessDocument(
     input.isDocumentSharedWithUser
   );
 }
+
+export function roleCanShareDocument(
+  role: WorkspaceRole,
+  input: { hasProjectAccess: boolean },
+): boolean {
+  return roleCanAccessProjectDocuments(role) && input.hasProjectAccess;
+}

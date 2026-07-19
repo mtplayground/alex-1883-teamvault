@@ -6,8 +6,9 @@ import express from 'express';
 
 import type { AuthConfig } from '../config.js';
 import type { MctaiJwtVerifier } from '../auth/session.js';
+import type { SendEmailInput } from '../email/client.js';
 import type { ObjectStorage, PutObjectInput } from '../storage/s3.js';
-import { createProjectRouter } from './routes.js';
+import { createProjectRouter, type ProjectEmailSender } from './routes.js';
 import type { ProjectQueryable } from './store.js';
 
 const authConfig: AuthConfig = {
@@ -311,6 +312,146 @@ test('guest cannot list documents from an unshared project', async () => {
   });
 });
 
+test('member can share a document with a workspace user and sends email', async () => {
+  const sentEmails: SendEmailInput[] = [];
+  const db = routeDb([
+    userRow(),
+    roleRow('member'),
+    documentRows(),
+    projectRows(),
+    shareRecipientRows(),
+    documentShareRows({ inserted: true }),
+  ]);
+  const response = await withProjectServer(
+    db,
+    (baseUrl) =>
+      fetch(
+        `${baseUrl}/api/workspaces/workspace-1/projects/project-1/documents/document-1/shares`,
+        {
+          method: 'POST',
+          headers: {
+            cookie: 'mctai_session=valid',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ userSub: 'auth|guest' }),
+        },
+      ),
+    {
+      selfUrl: 'https://vault.example.test',
+      emailSender: {
+        send: async (input) => {
+          sentEmails.push(input);
+          return { status: 'sent', id: 'email-1' };
+        },
+      },
+    },
+  );
+
+  assert.equal(response.status, 201);
+  assert.deepEqual(await response.json(), {
+    share: documentShareResponse(),
+    email: { status: 'sent', id: 'email-1' },
+  });
+  assert.equal(sentEmails.length, 1);
+  assert.equal(sentEmails[0]?.to, 'guest@example.test');
+  assert.equal(sentEmails[0]?.subject, 'A document was shared with you');
+  assert.match(
+    sentEmails[0]?.text ?? '',
+    /https:\/\/vault\.example\.test\/projects\/project-1\/documents\/document-1/,
+  );
+});
+
+test('existing document share does not send duplicate email', async () => {
+  let sendCount = 0;
+  const db = routeDb([
+    userRow(),
+    roleRow('member'),
+    documentRows(),
+    projectRows(),
+    shareRecipientRows(),
+    documentShareRows({ inserted: false }),
+  ]);
+  const response = await withProjectServer(
+    db,
+    (baseUrl) =>
+      fetch(
+        `${baseUrl}/api/workspaces/workspace-1/projects/project-1/documents/document-1/shares`,
+        {
+          method: 'POST',
+          headers: {
+            cookie: 'mctai_session=valid',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ userSub: 'auth|guest' }),
+        },
+      ),
+    {
+      emailSender: {
+        send: async () => {
+          sendCount += 1;
+          return { status: 'sent', id: 'email-1' };
+        },
+      },
+    },
+  );
+
+  assert.equal(response.status, 200);
+  const body = (await response.json()) as { email: unknown };
+  assert.equal(body.email, null);
+  assert.equal(sendCount, 0);
+});
+
+test('member can unshare a document', async () => {
+  const db = routeDb([
+    userRow(),
+    roleRow('member'),
+    documentRows(),
+    projectRows(),
+    deletedShareRows(),
+  ]);
+  const response = await withProjectServer(db, (baseUrl) =>
+    fetch(
+      `${baseUrl}/api/workspaces/workspace-1/projects/project-1/documents/document-1/shares/auth%7Cguest`,
+      {
+        method: 'DELETE',
+        headers: {
+          cookie: 'mctai_session=valid',
+        },
+      },
+    ),
+  );
+
+  assert.equal(response.status, 204);
+});
+
+test('guest cannot share documents even with project access', async () => {
+  const db = routeDb([
+    userRow(),
+    roleRow('guest'),
+    documentRows(),
+    projectRows(),
+    shareRows(),
+  ]);
+  const response = await withProjectServer(db, (baseUrl) =>
+    fetch(
+      `${baseUrl}/api/workspaces/workspace-1/projects/project-1/documents/document-1/shares`,
+      {
+        method: 'POST',
+        headers: {
+          cookie: 'mctai_session=valid',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ userSub: 'auth|other' }),
+      },
+    ),
+  );
+
+  assert.equal(response.status, 403);
+  assert.deepEqual(await response.json(), {
+    error: 'Only project owners and members can share documents',
+  });
+});
+
 test('guest can download explicitly shared documents without project access', async () => {
   const db = routeDb([
     userRow(),
@@ -437,7 +578,11 @@ test('member can view documents inline', async () => {
 async function withProjectServer(
   db: ProjectQueryable,
   request: (baseUrl: string) => Promise<Response>,
-  options: { storage?: ObjectStorage | null } = {},
+  options: {
+    storage?: ObjectStorage | null;
+    emailSender?: ProjectEmailSender;
+    selfUrl?: string | null;
+  } = {},
 ): Promise<Response> {
   const app = express();
   app.use(express.json());
@@ -448,6 +593,8 @@ async function withProjectServer(
       db,
       verifier,
       storage: options.storage,
+      emailSender: options.emailSender,
+      selfUrl: options.selfUrl,
     }),
   );
 
@@ -527,11 +674,41 @@ function shareRows() {
   };
 }
 
-function documentShareRows() {
+function documentShareRows({ inserted = true }: { inserted?: boolean } = {}) {
   return {
     rows: [
       {
         document_id: 'document-1',
+        workspace_id: 'workspace-1',
+        project_id: 'project-1',
+        user_sub: 'auth|guest',
+        shared_by_sub: 'auth|123',
+        created_at: now,
+        inserted,
+      },
+    ],
+  };
+}
+
+function deletedShareRows() {
+  return {
+    rows: [
+      {
+        document_id: 'document-1',
+      },
+    ],
+  };
+}
+
+function shareRecipientRows() {
+  return {
+    rows: [
+      {
+        user_sub: 'auth|guest',
+        email: 'guest@example.test',
+        name: 'Guest',
+        role: 'guest',
+        workspace_name: 'Client Vault',
       },
     ],
   };
@@ -580,5 +757,16 @@ function documentResponse() {
     sizeBytes: 9,
     uploaderSub: 'auth|123',
     uploadedAt: now.toISOString(),
+  };
+}
+
+function documentShareResponse() {
+  return {
+    documentId: 'document-1',
+    workspaceId: 'workspace-1',
+    projectId: 'project-1',
+    userSub: 'auth|guest',
+    sharedBySub: 'auth|123',
+    createdAt: now.toISOString(),
   };
 }

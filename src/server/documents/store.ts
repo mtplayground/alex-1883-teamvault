@@ -7,6 +7,7 @@ import {
   type NewProjectDocumentInput,
   type ProjectDocument,
   type ProjectDocumentShare,
+  type ProjectDocumentShareUpsertResult,
 } from './model.js';
 
 export interface DocumentQueryable {
@@ -37,6 +38,7 @@ interface ProjectDocumentShareRow {
   user_sub: string;
   shared_by_sub: string;
   created_at: Date;
+  inserted: boolean;
 }
 
 export class ProjectDocumentNotFoundError extends Error {
@@ -135,7 +137,7 @@ export async function getProjectDocument(
 export async function createProjectDocumentShare(
   db: DocumentQueryable,
   input: NewProjectDocumentShareInput,
-): Promise<ProjectDocumentShare> {
+): Promise<ProjectDocumentShareUpsertResult> {
   const result = await db.query<ProjectDocumentShareRow>(
     `
       insert into project_document_shares (
@@ -148,7 +150,7 @@ export async function createProjectDocumentShare(
       values ($1, $2, $3, $4, $5)
       on conflict (document_id, user_sub)
       do update set shared_by_sub = excluded.shared_by_sub
-      returning document_id, workspace_id, project_id, user_sub, shared_by_sub, created_at
+      returning document_id, workspace_id, project_id, user_sub, shared_by_sub, created_at, (xmax = 0) as inserted
     `,
     [
       normalizeRequiredText(input.documentId, 'documentId'),
@@ -164,7 +166,10 @@ export async function createProjectDocumentShare(
     throw new Error('Project document share creation returned no rows');
   }
 
-  return mapProjectDocumentShareRow(row);
+  return {
+    share: mapProjectDocumentShareRow(row),
+    isNew: row.inserted,
+  };
 }
 
 export async function isProjectDocumentSharedWithUser(
@@ -177,6 +182,26 @@ export async function isProjectDocumentSharedWithUser(
       from project_document_shares
       where document_id = $1
         and user_sub = $2
+    `,
+    [
+      normalizeRequiredText(input.documentId, 'documentId'),
+      normalizeRequiredText(input.userSub, 'userSub'),
+    ],
+  );
+
+  return Boolean(result.rows[0]);
+}
+
+export async function deleteProjectDocumentShare(
+  db: DocumentQueryable,
+  input: { documentId: string; userSub: string },
+): Promise<boolean> {
+  const result = await db.query<{ document_id: string }>(
+    `
+      delete from project_document_shares
+      where document_id = $1
+        and user_sub = $2
+      returning document_id
     `,
     [
       normalizeRequiredText(input.documentId, 'documentId'),

@@ -72,3 +72,16 @@ test('document shared template links to the shared document page', () => {
   assert.match(email.html, /Roadmap &amp; notes/);
   assert.match(email.text, /View document: https:\/\/app\.example\.test/);
 });
+
+test('document shared template can link to project document viewer', () => {
+  const email = templates.documentShared({
+    documentName: 'Plan.pdf',
+    documentId: 'document-1',
+    projectId: 'project-1',
+  });
+
+  assert.match(
+    email.html,
+    /https:\/\/app\.example\.test\/projects\/project-1\/documents\/document-1/,
+  );
+});

@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   roleCanAccessDocument,
   roleCanAccessProjectDocuments,
+  roleCanShareDocument,
 } from './permissions.js';
 
 test('owners and members can access project documents', () => {
@@ -16,6 +17,7 @@ test('owners and members can access project documents', () => {
       }),
       true,
     );
+    assert.equal(roleCanShareDocument(role, { hasProjectAccess: true }), true);
   }
 });
 
@@ -41,5 +43,17 @@ test('guests need project access or an explicit document share', () => {
       isDocumentSharedWithUser: true,
     }),
     true,
+  );
+  assert.equal(
+    roleCanShareDocument('guest', { hasProjectAccess: true }),
+    false,
+  );
+  assert.equal(
+    roleCanShareDocument('guest', { hasProjectAccess: false }),
+    false,
+  );
+  assert.equal(
+    roleCanShareDocument('member', { hasProjectAccess: false }),
+    false,
   );
 });

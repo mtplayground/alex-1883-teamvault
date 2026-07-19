@@ -40,6 +40,7 @@ export interface DocumentSharedEmailInput {
   sharedByName?: string;
   documentName: string;
   documentId: string;
+  projectId?: string;
   workspaceName?: string;
 }
 
@@ -155,7 +156,11 @@ export function renderDocumentSharedEmail(
 ): RenderedEmailTemplate {
   const actionUrl = buildAppUrl(
     context.baseUrl,
-    `/documents/${encodeURIComponent(input.documentId)}`,
+    input.projectId
+      ? `/projects/${encodeURIComponent(input.projectId)}/documents/${encodeURIComponent(
+          input.documentId,
+        )}`
+      : `/documents/${encodeURIComponent(input.documentId)}`,
   );
   const greeting = greetingFor(input.recipientName);
   const sharer = input.sharedByName
