@@ -14,6 +14,7 @@ import {
 } from './config.js';
 import { createAuthRouter } from './auth/routes.js';
 import { closePool, smokeTestDatabase } from './db/pool.js';
+import { createProjectRouter } from './projects/routes.js';
 import { createWorkspaceRouter } from './workspaces/routes.js';
 import type { HealthResponse } from '../shared/health.js';
 
@@ -41,6 +42,12 @@ app.use(
     authConfig: readAuthConfig(process.env),
     emailConfig: readEmailConfig(process.env),
     selfUrl: process.env.SELF_URL ? readSelfUrl(process.env) : null,
+  }),
+);
+app.use(
+  '/api/workspaces',
+  createProjectRouter({
+    authConfig: readAuthConfig(process.env),
   }),
 );
 
