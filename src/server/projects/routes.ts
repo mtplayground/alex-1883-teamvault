@@ -13,8 +13,16 @@ import type { MctaiJwtVerifier } from '../auth/session.js';
 import { requireWorkspaceMembership } from '../workspaces/store.js';
 import type { WorkspaceRole } from '../workspaces/model.js';
 import { roleCan } from '../workspaces/permissions.js';
-import { saveProjectDocument } from '../documents/service.js';
+import {
+  retrieveProjectDocument,
+  saveProjectDocument,
+  type RetrievedProjectDocument,
+} from '../documents/service.js';
 import type { ProjectDocument } from '../documents/model.js';
+import {
+  listProjectDocuments,
+  ProjectDocumentNotFoundError,
+} from '../documents/store.js';
 import { S3ObjectStorage, type ObjectStorage } from '../storage/s3.js';
 import {
   roleCanCreateProject,
@@ -163,6 +171,74 @@ export function createProjectRouter({
         });
 
         res.status(201).json({ document: documentResponse(document) });
+      } catch (error) {
+        handleProjectError(error, res, next);
+      }
+    },
+  );
+
+  router.get(
+    '/:workspaceId/projects/:projectId/documents',
+    async (req, res, next) => {
+      try {
+        const workspaceId = req.params.workspaceId;
+        const projectId = req.params.projectId;
+        const currentUser = currentUserLocals(res);
+        const role = await requireWorkspaceMembership(
+          db,
+          workspaceId,
+          currentUser.currentUser.sub,
+        );
+
+        await getProjectForRole(db, {
+          workspaceId,
+          projectId,
+          userSub: currentUser.currentUser.sub,
+          role,
+        });
+
+        const documents = await listProjectDocuments(db, {
+          workspaceId,
+          projectId,
+        });
+
+        res.json({ documents: documents.map(documentResponse) });
+      } catch (error) {
+        handleProjectError(error, res, next);
+      }
+    },
+  );
+
+  router.get(
+    '/:workspaceId/projects/:projectId/documents/:documentId/download',
+    async (req, res, next) => {
+      try {
+        const retrievedDocument = await retrieveAuthorizedProjectDocument({
+          db,
+          storage: objectStorage,
+          req,
+          res,
+        });
+
+        sendDocumentFile(res, retrievedDocument, 'attachment');
+      } catch (error) {
+        handleProjectError(error, res, next);
+      }
+    },
+  );
+
+  router.get(
+    '/:workspaceId/projects/:projectId/documents/:documentId',
+    async (req, res, next) => {
+      try {
+        const retrievedDocument = await retrieveAuthorizedProjectDocument({
+          db,
+          storage: objectStorage,
+          req,
+          res,
+        });
+
+        sendDocumentFile(res, retrievedDocument, 'inline');
       } catch (error) {
         handleProjectError(error, res, next);
       }
@@ -353,12 +429,84 @@ function readUploadBody(req: Request): Buffer {
   return req.body;
 }
 
+async function retrieveAuthorizedProjectDocument(input: {
+  db: ProjectQueryable;
+  storage: ObjectStorage | null;
+  req: Request;
+  res: Response;
+}): Promise<RetrievedProjectDocument> {
+  const workspaceId = readRouteParam(input.req, 'workspaceId');
+  const projectId = readRouteParam(input.req, 'projectId');
+  const currentUser = currentUserLocals(input.res);
+  const role = await requireWorkspaceMembership(
+    input.db,
+    workspaceId,
+    currentUser.currentUser.sub,
+  );
+
+  await getProjectForRole(input.db, {
+    workspaceId,
+    projectId,
+    userSub: currentUser.currentUser.sub,
+    role,
+  });
+
+  if (!input.storage) {
+    throw new ProjectStorageUnavailableError();
+  }
+
+  return retrieveProjectDocument(input.db, input.storage, {
+    workspaceId,
+    projectId,
+    documentId: readRouteParam(input.req, 'documentId'),
+  });
+}
+
+function readRouteParam(req: Request, key: string): string {
+  const value = req.params[key];
+
+  if (typeof value !== 'string') {
+    throw new ProjectValidationError(`${key} is required`);
+  }
+
+  return value;
+}
+
+function sendDocumentFile(
+  res: Response,
+  retrievedDocument: RetrievedProjectDocument,
+  disposition: 'inline' | 'attachment',
+): void {
+  res.setHeader('Content-Type', retrievedDocument.document.contentType);
+  res.setHeader(
+    'Content-Length',
+    String(retrievedDocument.file.body.byteLength),
+  );
+  res.setHeader('Cache-Control', 'private, max-age=0');
+  res.setHeader(
+    'Content-Disposition',
+    `${disposition}; filename="${escapeDispositionFilename(
+      retrievedDocument.document.fileName,
+    )}"`,
+  );
+  res.send(retrievedDocument.file.body);
+}
+
+function escapeDispositionFilename(fileName: string): string {
+  return fileName.replace(/["\\\r\n]/g, '_');
+}
+
 function handleProjectError(
   error: unknown,
   res: Response,
   next: (error?: unknown) => void,
 ): void {
   if (error instanceof ProjectNotFoundError) {
+    res.status(404).json({ error: error.message });
+    return;
+  }
+
+  if (error instanceof ProjectDocumentNotFoundError) {
     res.status(404).json({ error: error.message });
     return;
   }

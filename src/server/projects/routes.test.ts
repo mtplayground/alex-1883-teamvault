@@ -220,6 +220,137 @@ test('upload rejects files over the maximum size', async () => {
   });
 });
 
+test('member can list project documents', async () => {
+  const db = routeDb([
+    userRow(),
+    roleRow('member'),
+    projectRows(),
+    documentRows(),
+  ]);
+  const response = await withProjectServer(db, (baseUrl) =>
+    fetch(
+      `${baseUrl}/api/workspaces/workspace-1/projects/project-1/documents`,
+      {
+        headers: {
+          cookie: 'mctai_session=valid',
+        },
+      },
+    ),
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    documents: [documentResponse()],
+  });
+});
+
+test('guest can download documents from a shared project', async () => {
+  const db = routeDb([
+    userRow(),
+    roleRow('guest'),
+    projectRows(),
+    shareRows(),
+    documentRows(),
+  ]);
+  const response = await withProjectServer(
+    db,
+    (baseUrl) =>
+      fetch(
+        `${baseUrl}/api/workspaces/workspace-1/projects/project-1/documents/document-1/download`,
+        {
+          headers: {
+            cookie: 'mctai_session=valid',
+          },
+        },
+      ),
+    {
+      storage: {
+        putObject: async () => {
+          throw new Error('unexpected put');
+        },
+        getObject: async (key) => {
+          assert.equal(key, 'documents/document-1');
+          return {
+            body: Buffer.from('pdf-bytes'),
+            contentType: 'application/pdf',
+            contentLength: 9,
+          };
+        },
+      },
+    },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('content-type'), 'application/pdf');
+  assert.equal(
+    response.headers.get('content-disposition'),
+    'attachment; filename="Launch Plan.pdf"',
+  );
+  assert.equal(
+    Buffer.from(await response.arrayBuffer()).toString(),
+    'pdf-bytes',
+  );
+});
+
+test('guest cannot list documents from an unshared project', async () => {
+  const db = routeDb([userRow(), roleRow('guest'), projectRows(), emptyRows()]);
+  const response = await withProjectServer(db, (baseUrl) =>
+    fetch(
+      `${baseUrl}/api/workspaces/workspace-1/projects/project-1/documents`,
+      {
+        headers: {
+          cookie: 'mctai_session=valid',
+        },
+      },
+    ),
+  );
+
+  assert.equal(response.status, 403);
+  assert.deepEqual(await response.json(), {
+    error: 'Guests can only view projects shared with them',
+  });
+});
+
+test('member can view documents inline', async () => {
+  const db = routeDb([
+    userRow(),
+    roleRow('member'),
+    projectRows(),
+    documentRows(),
+  ]);
+  const response = await withProjectServer(
+    db,
+    (baseUrl) =>
+      fetch(
+        `${baseUrl}/api/workspaces/workspace-1/projects/project-1/documents/document-1`,
+        {
+          headers: {
+            cookie: 'mctai_session=valid',
+          },
+        },
+      ),
+    {
+      storage: {
+        putObject: async () => {
+          throw new Error('unexpected put');
+        },
+        getObject: async () => ({
+          body: Buffer.from('pdf-bytes'),
+          contentType: 'application/pdf',
+          contentLength: 9,
+        }),
+      },
+    },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(
+    response.headers.get('content-disposition'),
+    'inline; filename="Launch Plan.pdf"',
+  );
+  assert.equal(response.headers.get('cache-control'), 'private, max-age=0');
+});
+
 async function withProjectServer(
   db: ProjectQueryable,
   request: (baseUrl: string) => Promise<Response>,
@@ -303,6 +434,38 @@ function projectRows() {
   };
 }
 
+function shareRows() {
+  return {
+    rows: [
+      {
+        project_id: 'project-1',
+      },
+    ],
+  };
+}
+
+function documentRows() {
+  return {
+    rows: [
+      {
+        id: 'document-1',
+        workspace_id: 'workspace-1',
+        project_id: 'project-1',
+        file_name: 'Launch Plan.pdf',
+        content_type: 'application/pdf',
+        size_bytes: '9',
+        uploader_sub: 'auth|123',
+        storage_key: 'documents/document-1',
+        uploaded_at: now,
+      },
+    ],
+  };
+}
+
+function emptyRows() {
+  return { rows: [] };
+}
+
 function projectResponse() {
   return {
     id: 'project-1',
@@ -311,5 +474,18 @@ function projectResponse() {
     description: 'Files and dates',
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
+  };
+}
+
+function documentResponse() {
+  return {
+    id: 'document-1',
+    workspaceId: 'workspace-1',
+    projectId: 'project-1',
+    fileName: 'Launch Plan.pdf',
+    contentType: 'application/pdf',
+    sizeBytes: 9,
+    uploaderSub: 'auth|123',
+    uploadedAt: now.toISOString(),
   };
 }
